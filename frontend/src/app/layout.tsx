@@ -4,6 +4,7 @@ import { AuthProvider } from "@/context/AuthContext";
 import { AudioPlayerProvider } from "@/context/AudioPlayerContext";
 import { Sidebar } from "@/components/navigation/Sidebar";
 import { Topbar } from "@/components/navigation/Topbar";
+import { MobileNav } from "@/components/navigation/MobileNav";
 import { GlobalPlayer } from "@/components/player/GlobalPlayer";
 
 export const metadata = {
@@ -22,13 +23,14 @@ export default function RootLayout({
       <body className="bg-studio-950 text-studio-100 min-h-screen antialiased selection:bg-neon-cyan/20 selection:text-neon-cyan">
         <AuthProvider>
           <AudioPlayerProvider>
-            <div className="flex">
+            <div className="flex min-h-screen">
               <Sidebar />
-              <div className="flex-1 ml-64 min-h-screen flex flex-col">
+              <div className="flex-1 w-full lg:ml-64 min-h-screen flex flex-col">
                 <Topbar />
-                <main className="flex-1 pt-16 pb-24 px-8 overflow-x-hidden">
+                <main className="flex-1 pt-20 pb-36 lg:pb-28 px-4 sm:px-6 md:px-8 overflow-x-hidden max-w-full">
                   {children}
                 </main>
+                <MobileNav />
                 <GlobalPlayer />
               </div>
             </div>

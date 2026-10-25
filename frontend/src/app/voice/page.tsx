@@ -104,7 +104,7 @@ export default function VoiceConsentPage() {
           </div>
 
           <div className="p-4 rounded-lg bg-studio-900 border border-studio-700/60 font-mono text-sm text-white italic">
-            "{challenge?.phonetic_phrase || "I explicitly consent to Fombo Music AI modeling my acoustic vocal characteristics."}"
+            &ldquo;{challenge?.phonetic_phrase || "I explicitly consent to Fombo Music AI modeling my acoustic vocal characteristics."}&rdquo;
           </div>
 
           <p className="text-[11px] text-studio-400">

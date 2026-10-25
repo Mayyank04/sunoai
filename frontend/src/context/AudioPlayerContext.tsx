@@ -5,6 +5,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, ReactNod
 export interface TrackItem {
   id: string;
   title: string;
+  artist?: string;
   genre?: string;
   duration_seconds: number;
   audio_url: string;
