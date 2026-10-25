@@ -12,13 +12,18 @@ class Payment(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    subscription_id = Column(String(36), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True, index=True)
     amount_cents = Column(Integer, nullable=False)
     currency = Column(String(8), default="USD", nullable=False)
     status = Column(String(32), default="pending", nullable=False, index=True)  # 'pending', 'succeeded', 'failed', 'refunded'
     payment_intent_id = Column(String(128), unique=True, nullable=True, index=True)
     payment_method = Column(String(64), default="stripe_card", nullable=False)
+    provider = Column(String(32), default="stripe", nullable=False, index=True)  # 'stripe', 'razorpay'
+    receipt_url = Column(Text, nullable=True)
+    customer_email = Column(String(255), nullable=True)
     idempotency_key = Column(String(128), unique=True, nullable=True, index=True)
     metadata_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     user = relationship("User", back_populates="payments")
+    subscription = relationship("Subscription", back_populates="payments")

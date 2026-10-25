@@ -1,6 +1,6 @@
 from backend.app.models.user import User
 from backend.app.models.profile import Profile
-from backend.app.models.subscription import Subscription, CreditLedger
+from backend.app.models.subscription import Subscription, CreditLedger, WebhookEvent
 from backend.app.models.track import Track, Song
 from backend.app.models.version import SongVersion
 from backend.app.models.asset import Asset
@@ -62,4 +62,5 @@ __all__ = [
     "ListeningPlay",
     "Notification",
     "CopyrightClaim",
+    "WebhookEvent",
 ]
