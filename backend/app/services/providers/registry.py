@@ -4,11 +4,18 @@ from backend.app.services.providers.procedural import ProceduralMusicProvider
 from backend.app.services.providers.audiocraft import AudiocraftMusicProvider
 from backend.app.services.providers.suno import SunoMusicProvider
 from backend.app.services.providers.stability import StabilityAudioProvider
+from backend.app.services.providers.ace_step import ACEStepMusicProvider
+from backend.app.services.providers.heartmula import HeartMuLaMusicProvider
 
 class ProviderRegistry:
     def __init__(self):
         self._providers: Dict[str, MusicGenerationProvider] = {}
+        # Open-weight default and alternative providers
+        self.register(ACEStepMusicProvider())
+        self.register(HeartMuLaMusicProvider())
+        # Local offline procedural synth fallback (zero external dependencies)
         self.register(ProceduralMusicProvider())
+        # Local/remote GPU models & cloud proxies
         self.register(AudiocraftMusicProvider())
         self.register(SunoMusicProvider())
         self.register(StabilityAudioProvider())

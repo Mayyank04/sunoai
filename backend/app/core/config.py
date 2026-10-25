@@ -79,6 +79,9 @@ class Settings(BaseSettings):
 
     # Model Provider & Inference Configurations
     ENABLE_PROCEDURAL_SYNTH: bool = True
+    ACE_STEP_SERVICE_URL: Optional[str] = None
+    ACE_STEP_WEIGHTS_PATH: Optional[str] = None
+    HEARTMULA_SERVICE_URL: Optional[str] = None
     AUDIOCRAFT_SERVICE_URL: Optional[str] = None
     REPLICATE_API_TOKEN: Optional[str] = None
     SUNO_API_URL: Optional[str] = None

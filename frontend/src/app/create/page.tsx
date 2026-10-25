@@ -463,6 +463,24 @@ function CreateStudioContent() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Creation Form (2 cols) */}
         <form onSubmit={handleGenerate} className="lg:col-span-2 space-y-6">
+          {/* Unconfigured Provider Banner */}
+          {activeProvider && !activeProvider.is_configured && (
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-amber-300 text-xs">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-400" />
+              <div>
+                <strong className="font-semibold block mb-0.5">Generation Engine Not Configured</strong>
+                <p>
+                  Inference worker for &quot;{activeProvider.display_name}&quot; is not connected. Connect an actual self-hosted GPU worker (e.g. RunPod, Modal, or local Torch node) or switch to the built-in CC0 Procedural Synthesizer to compose audio.
+                </p>
+                {activeProvider.configuration_message && (
+                  <p className="mt-1 font-mono text-[11px] text-amber-400/80">
+                    {activeProvider.configuration_message}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Capability Warnings Banner if controls exceed provider capacity */}
           {(lyricsWarning || vocalsWarning) && (
             <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-amber-300 text-xs">
@@ -777,13 +795,15 @@ function CreateStudioContent() {
           <div className="flex gap-3">
             <button
               type="submit"
-              disabled={isGenerating}
+              disabled={isGenerating || (activeProvider ? !activeProvider.is_configured : false)}
               className="flex-1 py-4 rounded-2xl bg-gradient-to-r from-neon-cyan via-neon-purple to-neon-pink text-studio-950 font-bold text-sm tracking-wide uppercase hover:opacity-95 active:scale-[0.99] disabled:opacity-50 transition shadow-xl shadow-neon-cyan/20 flex items-center justify-center gap-2"
             >
               <Sparkles className="w-4 h-4 fill-current" />
               <span>
                 {isGenerating
                   ? "Synthesizing Audio..."
+                  : activeProvider && !activeProvider.is_configured
+                  ? "Generation Engine Not Configured"
                   : `Generate Master Audio (${estimatedCredits} Credits)`}
               </span>
             </button>

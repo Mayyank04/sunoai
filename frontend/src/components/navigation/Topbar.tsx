@@ -137,13 +137,21 @@ export const Topbar: React.FC = () => {
                 )}
               </div>
             ) : (
-              <button
-                onClick={() => setShowAuthModal(true)}
-                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-studio-850 hover:bg-studio-800 border border-studio-700 text-xs text-studio-200 transition"
-              >
-                <LogIn className="w-3.5 h-3.5 text-neon-cyan" />
-                <span>Sign In</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/login"
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl bg-studio-850 hover:bg-studio-800 border border-studio-700 text-xs text-studio-200 transition"
+                >
+                  <LogIn className="w-3.5 h-3.5 text-neon-cyan" />
+                  <span>Sign In</span>
+                </Link>
+                <Link
+                  href="/signup"
+                  className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-neon-cyan/20 hover:bg-neon-cyan/30 border border-neon-cyan/40 text-xs text-neon-cyan font-bold transition"
+                >
+                  <span>Sign Up</span>
+                </Link>
+              </div>
             )}
           </div>
         </div>
