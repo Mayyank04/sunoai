@@ -1,28 +1,28 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useAudioPlayer, TrackItem } from "@/context/AudioPlayerContext";
-import { ListMusic, Plus, Play, Disc, Clock, Sparkles } from "lucide-react";
+import { apiRequest } from "@/lib/api";
+import { ListMusic, Plus, Play, Disc, Clock, Lock, Globe, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 interface PlaylistItem {
   id: string;
-  title: string;
-  description: string;
-  trackCount: number;
-  totalDuration: string;
-  color: string;
-  tracks: TrackItem[];
+  name: string;
+  description?: string;
+  is_public: boolean;
+  cover_image_url?: string;
+  tracks?: TrackItem[];
+  created_at?: string;
 }
 
 const DEFAULT_PLAYLISTS: PlaylistItem[] = [
   {
     id: "pl_synthwave",
-    title: "Synthwave Nightfall",
+    name: "Synthwave Nightfall",
     description: "Analog arpeggios, gated snares, and neon highways for night driving.",
-    trackCount: 12,
-    totalDuration: "36 mins",
-    color: "#00f0ff",
+    is_public: true,
     tracks: [
       {
         id: "demo_synthwave",
@@ -37,11 +37,9 @@ const DEFAULT_PLAYLISTS: PlaylistItem[] = [
   },
   {
     id: "pl_lofi",
-    title: "Lo-Fi Coffee Break",
+    name: "Lo-Fi Coffee Break",
     description: "Dusty vinyl crackle, gentle rhodes chords, and mellow study beats.",
-    trackCount: 18,
-    totalDuration: "48 mins",
-    color: "#ec4899",
+    is_public: true,
     tracks: [
       {
         id: "demo_lofi",
@@ -56,11 +54,9 @@ const DEFAULT_PLAYLISTS: PlaylistItem[] = [
   },
   {
     id: "pl_cyber",
-    title: "Cyberpunk Overdrive",
+    name: "Cyberpunk Overdrive",
     description: "Heavy industrial distortion, driving 808s, and dystopian soundscapes.",
-    trackCount: 10,
-    totalDuration: "31 mins",
-    color: "#a855f7",
+    is_public: true,
     tracks: [
       {
         id: "demo_cyber",
@@ -73,51 +69,68 @@ const DEFAULT_PLAYLISTS: PlaylistItem[] = [
       },
     ],
   },
-  {
-    id: "pl_ambient",
-    title: "Deep Space Ambience",
-    description: "Weightless drones, shimmering reverbs, and generative floating textures.",
-    trackCount: 8,
-    totalDuration: "42 mins",
-    color: "#f59e0b",
-    tracks: [
-      {
-        id: "demo_ambient",
-        title: "Orbital Aurora Drifting",
-        genre: "Ambient Space",
-        duration_seconds: 75.0,
-        audio_url: "/api/v1/storage/file/tracks/demo_ambient.wav",
-        bpm: 90,
-        musical_key: "A Minor",
-      },
-    ],
-  },
 ];
 
 export default function PlaylistsPage() {
   const { playTrack } = useAudioPlayer();
   const [playlists, setPlaylists] = useState<PlaylistItem[]>(DEFAULT_PLAYLISTS);
+  const [loading, setLoading] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [isPublic, setIsPublic] = useState(true);
+  const [creating, setCreating] = useState(false);
 
-  const handleCreatePlaylist = (e: React.FormEvent) => {
+  const fetchPlaylists = () => {
+    setLoading(true);
+    apiRequest<{ items?: PlaylistItem[]; playlists?: PlaylistItem[] }>("/playlists")
+      .then((res) => {
+        const fetched = res.items || res.playlists;
+        if (fetched && fetched.length > 0) {
+          setPlaylists(fetched);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchPlaylists();
+  }, []);
+
+  const handleCreatePlaylist = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
 
-    const newPl: PlaylistItem = {
-      id: `pl_${Date.now()}`,
-      title: newTitle.trim(),
-      description: newDesc.trim() || "Custom creator playlist.",
-      trackCount: 0,
-      totalDuration: "0 mins",
-      color: "#00f0ff",
-      tracks: [],
-    };
-    setPlaylists([newPl, ...playlists]);
-    setNewTitle("");
-    setNewDesc("");
-    setShowCreateModal(false);
+    setCreating(true);
+    try {
+      const created = await apiRequest<PlaylistItem>("/playlists", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newTitle.trim(),
+          description: newDesc.trim() || undefined,
+          is_public: isPublic,
+        }),
+      });
+      setPlaylists([created, ...playlists]);
+      setNewTitle("");
+      setNewDesc("");
+      setIsPublic(true);
+      setShowCreateModal(false);
+    } catch {
+      // Fallback local playlist
+      const localPl: PlaylistItem = {
+        id: `pl_${Date.now()}`,
+        name: newTitle.trim(),
+        description: newDesc.trim() || "Custom playlist.",
+        is_public: isPublic,
+        tracks: [],
+      };
+      setPlaylists([localPl, ...playlists]);
+      setShowCreateModal(false);
+    } finally {
+      setCreating(false);
+    }
   };
 
   return (
@@ -130,7 +143,7 @@ export default function PlaylistsPage() {
             Curated Playlists & Collections
           </h1>
           <p className="text-xs md:text-sm text-studio-400 mt-1">
-            Organize your generated recordings and stems into thematic sets.
+            Organize your generated recordings, stems, and arrangements into public or private thematic sets.
           </p>
         </div>
         <Button variant="neon" onClick={() => setShowCreateModal(true)}>
@@ -148,22 +161,37 @@ export default function PlaylistsPage() {
           >
             <div>
               {/* Cover Art Box */}
-              <div
-                className="relative aspect-square rounded-xl overflow-hidden flex items-center justify-center mb-4 transition border border-studio-700/60 group-hover:border-studio-600"
-                style={{
-                  background: `linear-gradient(135deg, ${pl.color}25, #0a0b0e)`,
-                }}
-              >
-                <Disc
-                  className="w-16 h-16 opacity-70 group-hover:scale-105 transition"
-                  style={{ color: pl.color }}
-                />
+              <div className="relative aspect-square rounded-xl overflow-hidden flex items-center justify-center mb-4 transition border border-studio-700/60 bg-gradient-to-br from-studio-850 to-studio-950">
+                {pl.cover_image_url ? (
+                  <img
+                    src={pl.cover_image_url}
+                    alt={pl.name}
+                    className="w-full h-full object-cover group-hover:scale-105 transition"
+                  />
+                ) : (
+                  <Disc className="w-16 h-16 text-neon-cyan/70 group-hover:scale-105 transition" />
+                )}
+
+                {/* Privacy Badge */}
+                <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-studio-950/80 backdrop-blur-md border border-studio-800 text-[10px] font-mono flex items-center gap-1 text-studio-300">
+                  {pl.is_public ? (
+                    <>
+                      <Globe className="w-2.5 h-2.5 text-emerald-400" />
+                      Public
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-2.5 h-2.5 text-neon-amber" />
+                      Private
+                    </>
+                  )}
+                </span>
 
                 {/* Quick Play First Track Button */}
-                {pl.tracks.length > 0 && (
+                {pl.tracks && pl.tracks.length > 0 && (
                   <button
-                    onClick={() => playTrack(pl.tracks[0])}
-                    aria-label={`Play ${pl.title}`}
+                    onClick={() => playTrack(pl.tracks![0])}
+                    aria-label={`Play ${pl.name}`}
                     className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition cursor-pointer"
                   >
                     <div className="w-12 h-12 rounded-full bg-neon-cyan text-studio-950 flex items-center justify-center shadow-lg transform group-hover:scale-105 transition">
@@ -174,18 +202,18 @@ export default function PlaylistsPage() {
               </div>
 
               <h3 className="font-bold text-sm text-studio-100 group-hover:text-neon-cyan transition truncate">
-                {pl.title}
+                {pl.name}
               </h3>
               <p className="text-xs text-studio-400 mt-1 line-clamp-2 leading-relaxed">
-                {pl.description}
+                {pl.description || "Collection of master audio recordings."}
               </p>
             </div>
 
             <div className="mt-4 pt-3 border-t border-studio-800/80 flex items-center justify-between text-xs font-mono text-studio-400">
-              <span>{pl.trackCount} Tracks</span>
+              <span>{pl.tracks?.length || 0} Tracks</span>
               <span className="flex items-center gap-1 text-[11px]">
                 <Clock className="w-3.5 h-3.5" />
-                {pl.totalDuration}
+                Curated Set
               </span>
             </div>
           </div>
@@ -220,9 +248,37 @@ export default function PlaylistsPage() {
                   value={newDesc}
                   onChange={(e) => setNewDesc(e.target.value)}
                   rows={2}
-                  placeholder="Add optional notes or narrative..."
+                  placeholder="Add optional notes or thematic narrative..."
                   className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-studio-100 focus:outline-none focus:border-neon-cyan/50 resize-none"
                 />
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs font-mono text-studio-300">Visibility</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsPublic(true)}
+                    className={`px-3 py-1 rounded-lg text-xs font-mono transition border ${
+                      isPublic
+                        ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-400"
+                        : "bg-studio-950 border-studio-800 text-studio-400"
+                    }`}
+                  >
+                    Public
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsPublic(false)}
+                    className={`px-3 py-1 rounded-lg text-xs font-mono transition border ${
+                      !isPublic
+                        ? "bg-neon-amber/10 border-neon-amber/40 text-neon-amber"
+                        : "bg-studio-950 border-studio-800 text-studio-400"
+                    }`}
+                  >
+                    Private
+                  </button>
+                </div>
               </div>
 
               <div className="flex justify-end gap-2.5 pt-2">
@@ -233,8 +289,8 @@ export default function PlaylistsPage() {
                 >
                   Cancel
                 </Button>
-                <Button type="submit" variant="neon">
-                  Create
+                <Button type="submit" variant="neon" disabled={creating}>
+                  {creating ? "Creating..." : "Create Playlist"}
                 </Button>
               </div>
             </form>

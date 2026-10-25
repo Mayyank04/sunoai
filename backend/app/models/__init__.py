@@ -15,7 +15,9 @@ from backend.app.models.playlist import Playlist, PlaylistTrack
 from backend.app.models.social import Artist, Like, Follow, Comment
 from backend.app.models.license import License
 from backend.app.models.payment import Payment
-from backend.app.models.moderation import Moderation, Report, AuditLog, AuditEvent
+from backend.app.models.moderation import Moderation, Report, AuditLog, AuditEvent, CopyrightClaim
+from backend.app.models.notification import Notification
+from backend.app.models.analytics import ListeningPlay
 
 from backend.app.models.persona import MusicPersona
 from backend.app.models.voice_model import VoiceModel, VoiceAuditLog
@@ -57,4 +59,7 @@ __all__ = [
     "MusicPersona",
     "VoiceModel",
     "VoiceAuditLog",
+    "ListeningPlay",
+    "Notification",
+    "CopyrightClaim",
 ]

@@ -15,6 +15,7 @@ class ProfileUpdate(BaseModel):
 class ProfileRead(BaseModel):
     id: str
     user_id: str
+    username: Optional[str] = None
     display_name: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -209,6 +210,10 @@ class PlaylistUpdate(BaseModel):
 class PlaylistTrackAdd(BaseModel):
     track_id: str
     position: Optional[int] = 0
+
+class PlaylistReorderRequest(BaseModel):
+    track_ids: List[str]
+
 
 class PlaylistRead(BaseModel):
     id: str

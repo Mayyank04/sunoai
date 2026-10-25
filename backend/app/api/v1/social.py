@@ -8,6 +8,7 @@ from backend.app.core.security import get_current_user
 from backend.app.models.user import User
 from backend.app.models.track import Track
 from backend.app.models.social import Artist, Like, Follow, Comment
+from backend.app.models.notification import Notification
 from backend.app.schemas.entities import (
     ArtistRead,
     CommentCreate,
@@ -38,6 +39,18 @@ async def like_track(
         new_like = Like(user_id=current_user.id, track_id=track_id)
         track.like_count += 1
         db.add(new_like)
+        if track.user_id != current_user.id:
+            db.add(
+                Notification(
+                    user_id=track.user_id,
+                    actor_id=current_user.id,
+                    type="like",
+                    title="New Track Like",
+                    message=f"{current_user.username} liked your track '{track.title}'.",
+                    resource_type="track",
+                    resource_id=track.id,
+                )
+            )
         await db.commit()
 
     return StandardResponse(message="Track liked")
@@ -73,7 +86,8 @@ async def create_comment(
 ):
     """Post a comment on a track (optionally anchored to a playback timestamp)."""
     t_res = await db.execute(select(Track).where(Track.id == track_id))
-    if not t_res.scalar_one_or_none():
+    track = t_res.scalar_one_or_none()
+    if not track:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Track not found.")
 
     comment = Comment(
@@ -84,6 +98,18 @@ async def create_comment(
         content=req.content,
     )
     db.add(comment)
+    if track.user_id != current_user.id:
+        db.add(
+            Notification(
+                user_id=track.user_id,
+                actor_id=current_user.id,
+                type="comment",
+                title="New Comment",
+                message=f"{current_user.username} commented on '{track.title}': \"{req.content[:60]}...\"",
+                resource_type="track",
+                resource_id=track.id,
+            )
+        )
     await db.commit()
     await db.refresh(comment)
     return CommentRead.model_validate(comment)
@@ -132,6 +158,17 @@ async def follow_user(
     if not f_res.scalar_one_or_none():
         new_follow = Follow(follower_id=current_user.id, following_id=target_user_id)
         db.add(new_follow)
+        db.add(
+            Notification(
+                user_id=target_user_id,
+                actor_id=current_user.id,
+                type="follow",
+                title="New Follower",
+                message=f"{current_user.username} is now following your artist profile.",
+                resource_type="user",
+                resource_id=current_user.id,
+            )
+        )
         await db.commit()
 
     return StandardResponse(message="User followed")

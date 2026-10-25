@@ -83,7 +83,27 @@ async def get_current_user(
 async def get_current_active_user(user: User = Depends(get_current_user)) -> User:
     return user
 
-def require_role(required_role: str):
+async def get_optional_current_user(
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+) -> Optional[User]:
+    """Extracts user if valid Bearer token provided, otherwise returns None without throwing."""
+    if not token:
+        return None
+    payload = decode_access_token(token)
+    if not payload:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active:
+        return None
+    return user
+
+
+def require_role(required_role: Any):
     """Enforces specific role or admin access."""
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
         role_hierarchy = {
@@ -95,12 +115,19 @@ def require_role(required_role: str):
             "admin": 6,
         }
         user_level = role_hierarchy.get(current_user.role, 0)
-        required_level = role_hierarchy.get(required_role, 0)
-
-        if user_level < required_level and current_user.role != "admin":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Action requires '{required_role}' privileges or higher."
-            )
+        if isinstance(required_role, (list, tuple, set)):
+            min_required = min([role_hierarchy.get(r, 0) for r in required_role])
+            if current_user.role not in required_role and user_level < min_required and current_user.role != "admin":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Action requires one of {required_role} privileges."
+                )
+        else:
+            required_level = role_hierarchy.get(required_role, 0)
+            if user_level < required_level and current_user.role != "admin":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Action requires '{required_role}' privileges or higher."
+                )
         return current_user
     return role_checker

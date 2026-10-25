@@ -27,6 +27,10 @@ class Track(Base):
     cover_image_url = Column(Text, nullable=True)
     lyrics = Column(Text, nullable=True)
     is_public = Column(Boolean, default=False, nullable=False, index=True)
+    visibility = Column(String(32), default="private", nullable=False, index=True)  # 'public', 'unlisted', 'private'
+    moderation_status = Column(String(32), default="approved", nullable=False, index=True)  # 'approved', 'pending', 'flagged', 'taken_down'
+    hashtags = Column(JSON, nullable=True)  # List[str]
+    share_count = Column(Integer, default=0, nullable=False)
     is_featured = Column(Boolean, default=False, nullable=False)
     play_count = Column(Integer, default=0, nullable=False)
     like_count = Column(Integer, default=0, nullable=False)

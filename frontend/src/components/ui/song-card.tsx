@@ -1,11 +1,10 @@
-"use client";
-
 import React, { useState } from "react";
 import Link from "next/link";
 import { useAudioPlayer, TrackItem } from "@/context/AudioPlayerContext";
-import { Play, Pause, Disc, ShieldCheck, Heart, MoreVertical, Radio } from "lucide-react";
+import { Play, Pause, Disc, ShieldCheck, Heart, Lock, EyeOff } from "lucide-react";
 import { Badge } from "./badge";
 import { ProvenanceModal } from "@/components/provenance/ProvenanceModal";
+import { apiRequest } from "@/lib/api";
 
 interface SongCardProps {
   track: TrackItem;
@@ -21,8 +20,27 @@ export const SongCard: React.FC<SongCardProps> = ({
   const { currentTrack, isPlaying, playTrack, togglePlay } = useAudioPlayer();
   const [showProvenance, setShowProvenance] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
+  const [likesCount, setLikesCount] = useState(track.like_count || 0);
 
+  const effectiveArtist = track.artist_username || artistUsername;
   const isThisPlaying = isPlaying && currentTrack?.id === track.id;
+
+  const handleToggleLike = async () => {
+    const nextState = !isLiked;
+    setIsLiked(nextState);
+    setLikesCount((prev) => (nextState ? prev + 1 : Math.max(0, prev - 1)));
+    try {
+      if (nextState) {
+        await apiRequest(`/tracks/${track.id}/like`, { method: "POST" });
+      } else {
+        await apiRequest(`/tracks/${track.id}/like`, { method: "DELETE" });
+      }
+    } catch {
+      // Revert if request fails
+      setIsLiked(!nextState);
+      setLikesCount((prev) => (nextState ? Math.max(0, prev - 1) : prev + 1));
+    }
+  };
 
   const formatDuration = (secs: number) => {
     if (!secs || isNaN(secs)) return "0:30";
@@ -37,11 +55,19 @@ export const SongCard: React.FC<SongCardProps> = ({
         <div>
           {/* Artwork Container */}
           <div className="relative aspect-square rounded-xl bg-gradient-to-br from-studio-800 via-studio-850 to-studio-950 border border-studio-700/60 overflow-hidden flex items-center justify-center mb-3.5 group-hover:border-neon-cyan/40 transition">
-            <Disc
-              className={`w-14 h-14 text-studio-600 transition-all duration-300 ${
-                isThisPlaying ? "animate-spin text-neon-cyan scale-110" : "group-hover:text-neon-cyan/60"
-              }`}
-            />
+            {track.cover_image_url ? (
+              <img
+                src={track.cover_image_url}
+                alt={track.title}
+                className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+              />
+            ) : (
+              <Disc
+                className={`w-14 h-14 text-studio-600 transition-all duration-300 ${
+                  isThisPlaying ? "animate-spin text-neon-cyan scale-110" : "group-hover:text-neon-cyan/60"
+                }`}
+              />
+            )}
 
             {/* Play Button Overlay */}
             <button
@@ -57,6 +83,14 @@ export const SongCard: React.FC<SongCardProps> = ({
                 )}
               </div>
             </button>
+
+            {/* Visibility Badge (if unlisted or private) */}
+            {track.visibility && track.visibility !== "public" && (
+              <span className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-studio-950/80 backdrop-blur-md border border-studio-800 text-[10px] font-mono text-neon-amber flex items-center gap-1">
+                {track.visibility === "private" ? <Lock className="w-2.5 h-2.5" /> : <EyeOff className="w-2.5 h-2.5" />}
+                {track.visibility.toUpperCase()}
+              </span>
+            )}
 
             {/* Top Right Duration Pill */}
             <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md bg-studio-950/80 backdrop-blur-md border border-studio-800 text-[10px] font-mono text-studio-300">
@@ -82,10 +116,10 @@ export const SongCard: React.FC<SongCardProps> = ({
 
             {showArtist && (
               <Link
-                href={`/profile/${artistUsername}`}
+                href={`/profile/${effectiveArtist}`}
                 className="text-xs text-studio-400 hover:text-studio-200 transition block truncate"
               >
-                @{artistUsername}
+                @{effectiveArtist}
               </Link>
             )}
 
@@ -117,13 +151,14 @@ export const SongCard: React.FC<SongCardProps> = ({
 
           <div className="flex items-center gap-1.5">
             <button
-              onClick={() => setIsLiked(!isLiked)}
+              onClick={handleToggleLike}
               aria-label="Like track"
-              className={`p-1.5 rounded-lg transition ${
+              className={`p-1.5 rounded-lg transition flex items-center gap-1 text-[11px] font-mono ${
                 isLiked ? "text-neon-pink" : "text-studio-500 hover:text-studio-300"
               }`}
             >
               <Heart className={`w-3.5 h-3.5 ${isLiked ? "fill-current" : ""}`} />
+              {likesCount > 0 && <span>{likesCount}</span>}
             </button>
             <button
               onClick={() => setShowProvenance(true)}

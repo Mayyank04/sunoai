@@ -1,11 +1,14 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
+import { apiRequest } from "@/lib/api";
 
 export interface TrackItem {
   id: string;
   title: string;
   artist?: string;
+  artist_username?: string;
+  description?: string;
   genre?: string;
   duration_seconds: number;
   audio_url: string;
@@ -15,6 +18,13 @@ export interface TrackItem {
   musical_key?: string;
   user_id?: string;
   commercial_rights_status?: string;
+  visibility?: string;
+  moderation_status?: string;
+  hashtags?: string[];
+  lyrics?: string;
+  like_count?: number;
+  share_count?: number;
+  play_count?: number;
 }
 
 interface AudioPlayerContextType {
@@ -35,16 +45,23 @@ const AudioPlayerContext = createContext<AudioPlayerContextType | undefined>(und
 
 export function AudioPlayerProvider({ children }: { children: ReactNode }) {
   const [currentTrack, setCurrentTrack] = useState<TrackItem | null>(null);
+  const currentTrackRef = useRef<TrackItem | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolumeState] = useState(0.85);
+
+  const loggedPlaysRef = useRef<Set<string>>(new Set());
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
+
+  useEffect(() => {
+    currentTrackRef.current = currentTrack;
+  }, [currentTrack]);
 
   // Initialize Web Audio Graph
   useEffect(() => {
@@ -54,7 +71,27 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     audioRef.current = audio;
 
     const handleTimeUpdate = () => {
-      setCurrentTime(audio.currentTime);
+      const cur = audio.currentTime;
+      setCurrentTime(cur);
+
+      // Listening Analytics: Verify genuine listen at >= 15 seconds with bot/spam protections
+      if (currentTrackRef.current && cur >= 15.0) {
+        const tid = currentTrackRef.current.id;
+        if (!loggedPlaysRef.current.has(tid)) {
+          loggedPlaysRef.current.add(tid);
+          const dur = audio.duration || currentTrackRef.current.duration_seconds || 60;
+          apiRequest("/analytics/play", {
+            method: "POST",
+            body: JSON.stringify({
+              track_id: tid,
+              duration_listened_seconds: Math.round(cur),
+              completed_ratio: Math.min(1.0, Math.round((cur / dur) * 100) / 100),
+            }),
+          }).catch(() => {
+            // Telemetry failure ignored
+          });
+        }
+      }
     };
 
     const handleLoadedMetadata = () => {

@@ -21,6 +21,10 @@ from backend.app.api.v1.reports import router as reports_router
 from backend.app.api.v1.producer import router as producer_router
 from backend.app.api.v1.personas import router as personas_router
 from backend.app.api.v1.voice_models import router as voice_models_router
+from backend.app.api.v1.tracks import router as tracks_router
+from backend.app.api.v1.search import router as search_router
+from backend.app.api.v1.analytics import router as analytics_router
+from backend.app.api.v1.notifications import router as notifications_router
 from backend.app.api.v1.admin import router as admin_router
 from backend.app.api.v1.health import router as health_router
 
@@ -37,6 +41,7 @@ api_v1_router.include_router(profiles_router)
 api_v1_router.include_router(generation_router)
 api_v1_router.include_router(jobs_router)
 api_v1_router.include_router(library_router)
+api_v1_router.include_router(tracks_router)
 api_v1_router.include_router(lyrics_router)
 api_v1_router.include_router(stems_router)
 api_v1_router.include_router(provenance_router)
@@ -54,6 +59,9 @@ api_v1_router.include_router(storage_router)
 # Social & Community
 api_v1_router.include_router(playlists_router)
 api_v1_router.include_router(social_router)
+api_v1_router.include_router(search_router)
+api_v1_router.include_router(notifications_router)
+api_v1_router.include_router(analytics_router)
 
 # Commercial, Rights & Billing
 api_v1_router.include_router(licenses_router)
@@ -63,3 +71,4 @@ api_v1_router.include_router(sub_router)
 # Moderation, Safety & Administration
 api_v1_router.include_router(reports_router)
 api_v1_router.include_router(admin_router)
+

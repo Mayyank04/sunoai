@@ -10,17 +10,20 @@ import {
   CheckCircle2,
   ShieldCheck,
   Disc,
-  FileJson,
   Download,
   Sparkles,
   Play,
   Pause,
   AlertCircle,
-  ExternalLink,
   Copy,
   Radio,
   Layers,
   FileAudio,
+  Eye,
+  Lock,
+  Globe,
+  Share2,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +38,10 @@ interface Track {
   duration?: number;
   c2pa_manifest_id?: string;
   c2pa_signature?: string;
+  cover_image_url?: string;
+  visibility?: string;
+  lyrics?: string;
+  hashtags?: string[];
 }
 
 export default function PublishPage() {
@@ -45,29 +52,31 @@ export default function PublishPage() {
   const [loadingTracks, setLoadingTracks] = useState(true);
   const [selectedTrackId, setSelectedTrackId] = useState<string>("");
 
-  // Distribution Form
+  // Publishing Controls
+  const [visibility, setVisibility] = useState<"public" | "unlisted" | "private">("public");
   const [releaseTitle, setReleaseTitle] = useState("");
   const [primaryArtist, setPrimaryArtist] = useState(user?.username || "Fombo Creator");
-  const [featuredArtists, setFeaturedArtists] = useState("");
-  const [recordLabel, setRecordLabel] = useState("Fombo Independent Records");
+  const [description, setDescription] = useState("");
   const [genre, setGenre] = useState("Cyberpunk / Synthwave");
-  const [releaseDate, setReleaseDate] = useState(new Date().toISOString().split("T")[0]);
-  const [explicitContent, setExplicitContent] = useState<"clean" | "explicit" | "instrumental">("clean");
-  const [audioFormat, setAudioFormat] = useState<"wav_24_48" | "wav_16_44" | "mp3_320">("wav_24_48");
+  const [hashtagsInput, setHashtagsInput] = useState("#synthwave, #cyberpunk, #fombo");
+  const [coverImageUrl, setCoverImageUrl] = useState("https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80");
+  const [lyrics, setLyrics] = useState("");
+  const [bpm, setBpm] = useState(124);
+  const [musicalKey, setMusicalKey] = useState("F# Minor");
 
-  // ISRC & UPC
+  // ISRC & UPC Identifiers
   const [isrc, setIsrc] = useState("");
   const [upc, setUpc] = useState("");
   const [copiedIsrc, setCopiedIsrc] = useState(false);
 
-  // Legal / Rights
+  // Legal Attestation
   const [aiDisclosureConfirmed, setAiDisclosureConfirmed] = useState(true);
   const [commercialWarrantyConfirmed, setCommercialWarrantyConfirmed] = useState(true);
 
-  // Publish Status
-  const [isPackaging, setIsPackaging] = useState(false);
-  const [packagedResult, setPackagedResult] = useState<any | null>(null);
-  const [distributionSuccess, setDistributionSuccess] = useState(false);
+  // Publishing State
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishResponse, setPublishResponse] = useState<any | null>(null);
+  const [publishSuccessMessage, setPublishSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTracks();
@@ -82,37 +91,40 @@ export default function PublishPage() {
   const fetchTracks = async () => {
     try {
       setLoadingTracks(true);
-      const res = await apiRequest<{ items: Track[] }>("/library");
-      if (res && res.items && res.items.length > 0) {
-        setTracks(res.items);
-        selectTrack(res.items[0]);
+      const res = await apiRequest<{ tracks: Track[] }>("/library/tracks");
+      if (res && res.tracks && res.tracks.length > 0) {
+        setTracks(res.tracks);
+        selectTrack(res.tracks[0]);
       } else {
-        // Fallback default sample track for publish staging
         const fallbackTrack: Track = {
           id: "preview-synth-1",
           title: "Neon Horizon 2099",
-          genre: "Synthwave / Cyberpunk",
+          genre: "Synthwave",
           audio_url: "https://actions.google.com/sounds/v1/science_fiction/scifi_hum.ogg",
           bpm: 124,
           key_signature: "F# Minor",
           duration: 145,
           c2pa_manifest_id: "c2pa_urn_fombo_master_2099",
           c2pa_signature: "sha256:7f92a3c98de102ba8912ef",
+          visibility: "private",
+          lyrics: "[Verse 1]\nNeon silhouettes across the wire\nSignals calling through the atmospheric fire",
         };
         setTracks([fallbackTrack]);
         selectTrack(fallbackTrack);
       }
     } catch {
+      // Fallback demo track
       const fallbackTrack: Track = {
         id: "preview-synth-1",
         title: "Neon Horizon 2099",
-        genre: "Synthwave / Cyberpunk",
+        genre: "Synthwave",
         audio_url: "https://actions.google.com/sounds/v1/science_fiction/scifi_hum.ogg",
         bpm: 124,
         key_signature: "F# Minor",
         duration: 145,
         c2pa_manifest_id: "c2pa_urn_fombo_master_2099",
         c2pa_signature: "sha256:7f92a3c98de102ba8912ef",
+        visibility: "private",
       };
       setTracks([fallbackTrack]);
       selectTrack(fallbackTrack);
@@ -125,6 +137,10 @@ export default function PublishPage() {
     setSelectedTrackId(track.id);
     setReleaseTitle(track.title);
     if (track.genre) setGenre(track.genre);
+    if (track.bpm) setBpm(track.bpm);
+    if (track.lyrics) setLyrics(track.lyrics);
+    if (track.cover_image_url) setCoverImageUrl(track.cover_image_url);
+    if (track.visibility) setVisibility(track.visibility as any);
     generateCodes(track.title);
   };
 
@@ -145,73 +161,46 @@ export default function PublishPage() {
     setTimeout(() => setCopiedIsrc(false), 2000);
   };
 
-  const handleGeneratePackage = () => {
+  // Submit Publishing to Fombo Community Platform
+  const handlePublish = async () => {
     if (!selectedTrack) return;
-    setIsPackaging(true);
+    setIsPublishing(true);
+    setPublishSuccessMessage(null);
 
-    setTimeout(() => {
-      const packageData = {
-        package_version: "1.0-C2PA-DSP",
-        generated_at: new Date().toISOString(),
-        metadata: {
+    const hashtagsList = hashtagsInput
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter((tag) => tag.length > 0)
+      .map((tag) => (tag.startsWith("#") ? tag : `#${tag}`));
+
+    try {
+      const res = await apiRequest<{
+        track: Track;
+        distribution_notice: string;
+        c2pa_manifest_status: string;
+        share_url: string;
+      }>(`/tracks/${selectedTrack.id}/publish`, {
+        method: "POST",
+        body: JSON.stringify({
+          visibility,
           title: releaseTitle,
-          primary_artist: primaryArtist,
-          featured_artists: featuredArtists ? featuredArtists.split(",").map((s) => s.trim()) : [],
-          label: recordLabel,
-          primary_genre: genre,
-          release_date: releaseDate,
-          explicit: explicitContent,
-          isrc: isrc,
-          upc: upc,
-          duration_seconds: selectedTrack.duration || 180,
-          bpm: selectedTrack.bpm || 120,
-          key_signature: selectedTrack.key_signature || "C Major",
-        },
-        audio_assets: {
-          master_format: audioFormat === "wav_24_48" ? "WAV 24-bit / 48kHz (Broadcast)" : audioFormat === "wav_16_44" ? "WAV 16-bit / 44.1kHz (CD Red Book)" : "MP3 320kbps (Streaming)",
-          audio_stream_url: selectedTrack.audio_url,
-          checksum_sha256: "9b3c41ef8821ad5e88bb00392ad17f309d9426f048d0d1e1f78a05c317540263",
-        },
-        c2pa_provenance: {
-          assertion_title: "C2PA Content Credentials AI Audio Disclosure",
-          generator: "Fombo Music AI Audio Engine v1.0",
-          provenance_manifest_id: selectedTrack.c2pa_manifest_id || `urn:uuid:${selectedTrack.id}`,
-          digital_source_type: "http://cv.iptc.org/newscodes/digitalsourcetype/syntheticMedia",
-          training_opt_out: true,
-          commercial_rights_granted: true,
-          owner_account_id: user?.id || "fombo_creator_session",
-        },
-        distributor_targets: [
-          { service: "Spotify", delivery_status: "Ready for Ingestion" },
-          { service: "Apple Music", delivery_status: "Ready for Ingestion" },
-          { service: "Tidal HiFi", delivery_status: "Ready for Ingestion" },
-          { service: "Amazon Music", delivery_status: "Ready for Ingestion" },
-        ],
-      };
+          description,
+          genre,
+          hashtags: hashtagsList,
+          lyrics,
+          cover_image_url: coverImageUrl,
+          bpm,
+          musical_key: musicalKey,
+        }),
+      });
 
-      setPackagedResult(packageData);
-      setIsPackaging(false);
-    }, 1200);
-  };
-
-  const handleDownloadManifest = () => {
-    if (!packagedResult) return;
-    const blob = new Blob([JSON.stringify(packagedResult, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `FOMBO_MASTER_${isrc.replace(/-/g, "_")}_MANIFEST.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleSubmitDistribution = () => {
-    setDistributionSuccess(true);
-    setTimeout(() => {
-      setDistributionSuccess(false);
-    }, 5000);
+      setPublishResponse(res);
+      setPublishSuccessMessage(`Successfully published '${releaseTitle}' as ${visibility.toUpperCase()} on Fombo!`);
+    } catch (err: any) {
+      alert(`Publishing failed: ${err.message}`);
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   return (
@@ -223,12 +212,12 @@ export default function PublishPage() {
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-black tracking-tight text-white flex items-center gap-2.5">
                 <UploadCloud className="w-6 h-6 text-neon-cyan" />
-                Publish Master & Distribution Suite
+                Publish & Content Visibility Suite
               </h1>
-              <Badge variant="cyan">DSP Master 1.0</Badge>
+              <Badge variant="cyan">Phase 8</Badge>
             </div>
             <p className="text-xs text-studio-400">
-              Generate standardized ISRC/UPC release packages, verify C2PA content credentials, and prepare high-res stems for Spotify, Apple Music & Tidal.
+              Publish your master recordings to Fombo Community, control public/unlisted/private visibility, attach album artwork, and export C2PA manifests.
             </p>
           </div>
 
@@ -242,6 +231,22 @@ export default function PublishPage() {
               <Sparkles className="w-3.5 h-3.5 mr-1 text-neon-purple" />
               Regenerate ISRC
             </Button>
+          </div>
+        </div>
+
+        {/* DISTRIBUTION TRUTHFULNESS NOTICE BANNER */}
+        <div className="p-4 bg-studio-900/90 border border-amber-500/30 rounded-2xl flex items-start gap-3 shadow-lg">
+          <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs text-studio-300 leading-relaxed">
+            <strong className="text-amber-300 font-sans uppercase text-[11px] tracking-wider block">
+              Fombo Platform Community Distribution Notice
+            </strong>
+            <p>
+              Publishing places your master recording onto Fombo&apos;s public discovery network, community playlists, and artist profile according to your chosen visibility (<code className="text-white bg-studio-950 px-1 py-0.5 rounded">Public</code>, <code className="text-white bg-studio-950 px-1 py-0.5 rounded">Unlisted</code>, <code className="text-white bg-studio-950 px-1 py-0.5 rounded">Private</code>).
+            </p>
+            <p className="text-studio-400 text-[11px]">
+              ⚠️ <strong>Note on Commercial DSPs:</strong> Publishing to Fombo <strong>DOES NOT</strong> automatically ingest or distribute your track to external commercial streaming platforms such as Spotify, Apple Music, Tidal, or Amazon Music. To distribute to commercial DSPs, export your C2PA-signed WAV master package and submit it through an authorized digital music distributor (such as DistroKid, TuneCore, or CD Baby).
+            </p>
           </div>
         </div>
 
@@ -303,15 +308,13 @@ export default function PublishPage() {
                         )}
                       </button>
                       <div className="truncate">
-                        <div className="text-xs font-semibold truncate">{track.title}</div>
-                        <div className="text-[10px] font-mono text-studio-500 truncate">
-                          {track.genre || "Electronic"} • {track.bpm ? `${track.bpm} BPM` : "120 BPM"}
-                        </div>
+                        <span className="font-semibold text-xs block truncate">{track.title}</span>
+                        <span className="text-[10px] text-studio-400 font-mono">
+                          {track.genre || "Electronic"} &bull; {track.bpm || 120} BPM
+                        </span>
                       </div>
                     </div>
-                    {isSelected && (
-                      <CheckCircle2 className="w-4 h-4 text-neon-cyan flex-shrink-0 ml-2" />
-                    )}
+                    {isSelected && <Badge variant="cyan">Selected</Badge>}
                   </div>
                 );
               })}
@@ -319,206 +322,243 @@ export default function PublishPage() {
           )}
         </div>
 
-        {/* Metadata Editor Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* 2-Column Publishing Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Columns: Metadata, Visibility & Album Artwork */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="bg-studio-900/60 border border-studio-800 rounded-2xl p-6 space-y-5">
+            {/* Visibility Mode Selector */}
+            <div className="bg-studio-900/60 border border-studio-800 rounded-2xl p-5 space-y-4">
               <h2 className="text-sm font-bold text-white flex items-center gap-2">
-                <Layers className="w-4 h-4 text-neon-purple" />
-                2. Metadata & Release Credits
+                <Globe className="w-4 h-4 text-neon-purple" />
+                2. Content Visibility Tier
               </h2>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                <div>
-                  <label className="block text-studio-400 font-medium mb-1.5">Track / Single Title</label>
-                  <input
-                    type="text"
-                    value={releaseTitle}
-                    onChange={(e) => setReleaseTitle(e.target.value)}
-                    className="w-full bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neon-cyan transition font-medium"
-                    placeholder="e.g. Cybernetic Heartbeat"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-studio-400 font-medium mb-1.5">Primary Artist Name</label>
-                  <input
-                    type="text"
-                    value={primaryArtist}
-                    onChange={(e) => setPrimaryArtist(e.target.value)}
-                    className="w-full bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neon-cyan transition font-medium"
-                    placeholder="e.g. Mayyank"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-studio-400 font-medium mb-1.5">Featured Artists (Optional)</label>
-                  <input
-                    type="text"
-                    value={featuredArtists}
-                    onChange={(e) => setFeaturedArtists(e.target.value)}
-                    className="w-full bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neon-cyan transition"
-                    placeholder="e.g. Fombo Neural Ensemble, DJ Neon"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-studio-400 font-medium mb-1.5">Record Label / Publishing Imprint</label>
-                  <input
-                    type="text"
-                    value={recordLabel}
-                    onChange={(e) => setRecordLabel(e.target.value)}
-                    className="w-full bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neon-cyan transition"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-studio-400 font-medium mb-1.5">Primary Genre</label>
-                  <select
-                    value={genre}
-                    onChange={(e) => setGenre(e.target.value)}
-                    className="w-full bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neon-cyan transition"
-                  >
-                    <option value="Cyberpunk / Synthwave">Cyberpunk / Synthwave</option>
-                    <option value="Electronic / Dance">Electronic / Dance</option>
-                    <option value="Lo-Fi Hip Hop">Lo-Fi Hip Hop</option>
-                    <option value="Cinematic Orchestral">Cinematic Orchestral</option>
-                    <option value="Future Bass">Future Bass</option>
-                    <option value="Deep Tech House">Deep Tech House</option>
-                    <option value="Dark Ambient">Dark Ambient</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-studio-400 font-medium mb-1.5">Target Release Date</label>
-                  <input
-                    type="date"
-                    value={releaseDate}
-                    onChange={(e) => setReleaseDate(e.target.value)}
-                    className="w-full bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neon-cyan transition font-mono"
-                  />
-                </div>
-              </div>
-
-              {/* Explicit & Master Resolution */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-studio-800/80">
-                <div>
-                  <label className="block text-studio-400 font-medium mb-1.5 text-xs">Content Advisory</label>
-                  <div className="flex gap-2">
-                    {(["clean", "explicit", "instrumental"] as const).map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() => setExplicitContent(tag)}
-                        className={`flex-1 py-1.5 text-xs capitalize rounded-lg border font-medium transition ${
-                          explicitContent === tag
-                            ? "bg-studio-800 border-neon-cyan text-white shadow-sm"
-                            : "bg-studio-950/60 border-studio-800 text-studio-400 hover:text-white"
-                        }`}
-                      >
-                        {tag}
-                      </button>
-                    ))}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div
+                  onClick={() => setVisibility("public")}
+                  className={`p-3.5 rounded-xl border cursor-pointer transition space-y-1.5 ${
+                    visibility === "public"
+                      ? "bg-studio-850 border-neon-cyan text-white shadow-md shadow-neon-cyan/10"
+                      : "bg-studio-950/60 border-studio-800 text-studio-400 hover:border-studio-700 hover:text-white"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-neon-cyan" />
+                      Public
+                    </span>
+                    {visibility === "public" && <CheckCircle2 className="w-3.5 h-3.5 text-neon-cyan" />}
                   </div>
+                  <p className="text-[11px] text-studio-400 leading-tight">
+                    Indexed in global search, explore feeds, and visible on public profile.
+                  </p>
                 </div>
 
-                <div>
-                  <label className="block text-studio-400 font-medium mb-1.5 text-xs">Master Export Quality</label>
-                  <select
-                    value={audioFormat}
-                    onChange={(e) => setAudioFormat(e.target.value as any)}
-                    className="w-full bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-neon-cyan transition text-xs"
-                  >
-                    <option value="wav_24_48">24-bit / 48kHz Broadcast Master WAV</option>
-                    <option value="wav_16_44">16-bit / 44.1kHz Red Book Audio CD WAV</option>
-                    <option value="mp3_320">320 kbps Streaming Optimized MP3</option>
-                  </select>
+                <div
+                  onClick={() => setVisibility("unlisted")}
+                  className={`p-3.5 rounded-xl border cursor-pointer transition space-y-1.5 ${
+                    visibility === "unlisted"
+                      ? "bg-studio-850 border-neon-purple text-white shadow-md shadow-neon-purple/10"
+                      : "bg-studio-950/60 border-studio-800 text-studio-400 hover:border-studio-700 hover:text-white"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs flex items-center gap-1.5">
+                      <Eye className="w-3.5 h-3.5 text-neon-purple" />
+                      Unlisted
+                    </span>
+                    {visibility === "unlisted" && <CheckCircle2 className="w-3.5 h-3.5 text-neon-purple" />}
+                  </div>
+                  <p className="text-[11px] text-studio-400 leading-tight">
+                    Accessible only via direct permalink; hidden from public search feeds.
+                  </p>
+                </div>
+
+                <div
+                  onClick={() => setVisibility("private")}
+                  className={`p-3.5 rounded-xl border cursor-pointer transition space-y-1.5 ${
+                    visibility === "private"
+                      ? "bg-studio-850 border-amber-400 text-white shadow-md shadow-amber-400/10"
+                      : "bg-studio-950/60 border-studio-800 text-studio-400 hover:border-studio-700 hover:text-white"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      Private
+                    </span>
+                    {visibility === "private" && <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />}
+                  </div>
+                  <p className="text-[11px] text-studio-400 leading-tight">
+                    Strictly confidential. Only you and authorized session collaborators can access.
+                  </p>
                 </div>
               </div>
             </div>
 
-            {/* C2PA Legal & Rights Check */}
-            <div className="bg-studio-900/60 border border-studio-800 rounded-2xl p-6 space-y-4">
+            {/* Album Artwork & Metadata Form */}
+            <div className="bg-studio-900/60 border border-studio-800 rounded-2xl p-5 space-y-4">
               <h2 className="text-sm font-bold text-white flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-neon-green" />
-                3. C2PA Content Credentials & Commercial Warranty
+                <Layers className="w-4 h-4 text-neon-cyan" />
+                3. Metadata, Lyrics & Album Artwork
               </h2>
 
-              <div className="space-y-3 text-xs">
-                <label className="flex items-start gap-3 p-3 bg-studio-950/60 border border-studio-800/80 rounded-xl cursor-pointer hover:border-studio-700 transition">
-                  <input
-                    type="checkbox"
-                    checked={aiDisclosureConfirmed}
-                    onChange={(e) => setAiDisclosureConfirmed(e.target.checked)}
-                    className="mt-0.5 rounded border-studio-700 text-neon-cyan focus:ring-0"
-                  />
-                  <div>
-                    <span className="font-semibold text-white">AI Synthesis Disclosure (C2PA Spec v1.3)</span>
-                    <p className="text-studio-400 text-[11px] mt-0.5 leading-relaxed">
-                      Embed cryptographic manifest disclosing AI audio generation provenance. Compliant with EU AI Act Article 50 synthetic media watermarking mandates.
-                    </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                {/* Cover Art Preview */}
+                <div className="space-y-2">
+                  <label className="text-[11px] text-studio-400 block font-mono">ALBUM ARTWORK</label>
+                  <div className="w-full aspect-square rounded-2xl bg-studio-950 border border-studio-800 overflow-hidden relative shadow-lg group">
+                    <img
+                      src={coverImageUrl}
+                      alt="Cover Artwork"
+                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                    />
                   </div>
-                </label>
+                  <input
+                    type="text"
+                    value={coverImageUrl}
+                    onChange={(e) => setCoverImageUrl(e.target.value)}
+                    placeholder="Cover image URL..."
+                    className="w-full bg-studio-950 border border-studio-800 rounded-lg px-2.5 py-1.5 text-[11px] text-white focus:outline-none focus:border-neon-cyan"
+                  />
+                </div>
 
-                <label className="flex items-start gap-3 p-3 bg-studio-950/60 border border-studio-800/80 rounded-xl cursor-pointer hover:border-studio-700 transition">
-                  <input
-                    type="checkbox"
-                    checked={commercialWarrantyConfirmed}
-                    onChange={(e) => setCommercialWarrantyConfirmed(e.target.checked)}
-                    className="mt-0.5 rounded border-studio-700 text-neon-cyan focus:ring-0"
-                  />
+                {/* Metadata Fields */}
+                <div className="sm:col-span-2 space-y-3.5">
                   <div>
-                    <span className="font-semibold text-white">Commercial Rights & Master Warranty</span>
-                    <p className="text-studio-400 text-[11px] mt-0.5 leading-relaxed">
-                      I warrant that this master track was created under Fombo Studio Pro terms and holds commercial synchronization, broadcast, and streaming distribution clearance.
-                    </p>
+                    <label className="text-[11px] text-studio-400 block font-mono mb-1">TRACK TITLE</label>
+                    <input
+                      type="text"
+                      value={releaseTitle}
+                      onChange={(e) => setReleaseTitle(e.target.value)}
+                      className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-neon-cyan"
+                    />
                   </div>
-                </label>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] text-studio-400 block font-mono mb-1">PRIMARY GENRE</label>
+                      <input
+                        type="text"
+                        value={genre}
+                        onChange={(e) => setGenre(e.target.value)}
+                        className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-neon-cyan"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-studio-400 block font-mono mb-1">BPM / KEY</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={bpm}
+                          onChange={(e) => setBpm(parseInt(e.target.value) || 120)}
+                          className="w-16 bg-studio-950 border border-studio-800 rounded-xl px-2.5 py-2 text-xs text-white font-mono"
+                        />
+                        <input
+                          type="text"
+                          value={musicalKey}
+                          onChange={(e) => setMusicalKey(e.target.value)}
+                          className="flex-1 bg-studio-950 border border-studio-800 rounded-xl px-2.5 py-2 text-xs text-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-studio-400 block font-mono mb-1">
+                      HASHTAGS (Comma-separated)
+                    </label>
+                    <input
+                      type="text"
+                      value={hashtagsInput}
+                      onChange={(e) => setHashtagsInput(e.target.value)}
+                      placeholder="#synthwave, #cyberpunk, #electronic"
+                      className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-neon-cyan"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-studio-400 block font-mono mb-1">
+                      LYRICS DISPLAY (Optional)
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={lyrics}
+                      onChange={(e) => setLyrics(e.target.value)}
+                      placeholder="[Verse 1]&#10;Write or paste lyrics here with [Section] headers..."
+                      className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-neon-cyan"
+                    />
+                  </div>
+                </div>
               </div>
+            </div>
+
+            {/* Legal Attestations */}
+            <div className="bg-studio-900/60 border border-studio-800 rounded-2xl p-5 space-y-3">
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                4. Compliance & AI Disclosure Warranties
+              </h2>
+
+              <label className="flex items-start gap-3 p-3 bg-studio-950/60 border border-studio-800 rounded-xl cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={aiDisclosureConfirmed}
+                  onChange={(e) => setAiDisclosureConfirmed(e.target.checked)}
+                  className="mt-0.5 rounded border-studio-700 text-neon-cyan focus:ring-0 accent-neon-cyan"
+                />
+                <div>
+                  <span className="font-semibold text-white text-xs">C2PA Cryptographic Provenance Disclosure</span>
+                  <p className="text-studio-400 text-[11px] mt-0.5">
+                    Embed cryptographic manifest disclosing AI audio generation provenance. Complies with synthetic media transparency requirements.
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 p-3 bg-studio-950/60 border border-studio-800 rounded-xl cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={commercialWarrantyConfirmed}
+                  onChange={(e) => setCommercialWarrantyConfirmed(e.target.checked)}
+                  className="mt-0.5 rounded border-studio-700 text-neon-cyan focus:ring-0 accent-neon-cyan"
+                />
+                <div>
+                  <span className="font-semibold text-white text-xs">Platform Community Terms & Originality</span>
+                  <p className="text-studio-400 text-[11px] mt-0.5">
+                    I warrant that this master track does not infringe third-party copyrights or contain unauthorized voice clones.
+                  </p>
+                </div>
+              </label>
             </div>
           </div>
 
-          {/* Right Column: Identifiers & Export Status */}
+          {/* Right Column: Identifiers, Action & Response */}
           <div className="space-y-6">
-            {/* ISRC Card */}
             <div className="bg-studio-900/60 border border-studio-800 rounded-2xl p-5 space-y-4">
               <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-studio-400">
-                Distribution Identifiers
+                Asset Identifiers
               </h3>
 
-              <div className="space-y-3">
+              <div className="space-y-3 text-xs">
                 <div>
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] text-studio-400 font-medium">ISRC Code (ISO 3901)</span>
+                    <span className="text-[11px] text-studio-400">ISRC Code (ISO 3901)</span>
                     <button
                       onClick={handleCopyIsrc}
-                      className="text-[10px] text-neon-cyan hover:underline flex items-center gap-1"
+                      className="text-[10px] text-neon-cyan hover:underline flex items-center gap-1 font-mono"
                     >
                       <Copy className="w-3 h-3" />
                       {copiedIsrc ? "Copied!" : "Copy"}
                     </button>
                   </div>
-                  <div className="bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 font-mono text-xs text-neon-cyan font-bold flex items-center justify-between">
-                    <span>{isrc || "US-FMB-26-00000"}</span>
-                    <Badge variant="cyan">Standard</Badge>
+                  <div className="bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 font-mono text-neon-cyan font-bold">
+                    {isrc || "US-FMB-26-00000"}
                   </div>
                 </div>
 
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] text-studio-400 font-medium">UPC Barcode</span>
-                  </div>
-                  <div className="bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 font-mono text-xs text-studio-200">
+                  <span className="text-[11px] text-studio-400 block mb-1">UPC Barcode</span>
+                  <div className="bg-studio-950 border border-studio-800 rounded-lg px-3 py-2 font-mono text-studio-200">
                     {upc || "840000000000"}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] text-studio-400 font-medium">C2PA Asset Hash</span>
-                  </div>
-                  <div className="bg-studio-950 border border-studio-800 rounded-lg px-3 py-1.5 font-mono text-[10px] text-studio-400 truncate">
-                    {selectedTrack?.c2pa_signature || "sha256:7f92a3c98de102ba8912ef"}
                   </div>
                 </div>
               </div>
@@ -526,66 +566,49 @@ export default function PublishPage() {
               <div className="pt-2">
                 <Button
                   variant="neon"
-                  onClick={handleGeneratePackage}
-                  disabled={isPackaging || !aiDisclosureConfirmed || !commercialWarrantyConfirmed}
-                  className="w-full text-xs py-2.5"
+                  onClick={handlePublish}
+                  disabled={isPublishing || !aiDisclosureConfirmed || !commercialWarrantyConfirmed}
+                  className="w-full text-xs py-3 font-bold"
                 >
-                  {isPackaging ? (
+                  {isPublishing ? (
                     <>
                       <div className="w-3.5 h-3.5 border-2 border-studio-950 border-t-transparent animate-spin rounded-full mr-2" />
-                      Generating DSP Package...
+                      Publishing to Fombo...
                     </>
                   ) : (
                     <>
-                      <FileAudio className="w-4 h-4 mr-1.5" />
-                      Compile Distribution Package
+                      <UploadCloud className="w-4 h-4 mr-1.5" />
+                      Publish to Fombo ({visibility.toUpperCase()})
                     </>
                   )}
                 </Button>
               </div>
             </div>
 
-            {/* Packaged Result */}
-            {packagedResult && (
-              <div className="bg-studio-900/80 border border-neon-cyan/40 rounded-2xl p-5 space-y-4 shadow-xl shadow-neon-cyan/5 animate-in fade-in zoom-in-95 duration-200">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-neon-cyan" />
-                    <span className="text-xs font-bold text-white">DSP Package Ready</span>
-                  </div>
-                  <Badge variant="emerald">Ingestion Ready</Badge>
+            {/* Success Response & Share Card */}
+            {publishResponse && (
+              <div className="bg-studio-900/80 border border-neon-cyan/50 rounded-2xl p-5 space-y-4 shadow-xl animate-in zoom-in-95 duration-200 text-xs">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Release Active on Fombo!</span>
                 </div>
 
-                <p className="text-[11px] text-studio-300">
-                  Broadcast package compiled with C2PA signature, {audioFormat === "wav_24_48" ? "24-bit WAV" : "16-bit WAV"}, and distribution manifest.
+                <p className="text-studio-300 text-[11px]">
+                  {publishSuccessMessage}
                 </p>
 
-                <div className="space-y-2">
-                  <Button
-                    variant="outline"
-                    onClick={handleDownloadManifest}
-                    className="w-full text-xs border-studio-700 hover:border-white"
-                  >
-                    <Download className="w-3.5 h-3.5 mr-1.5 text-neon-cyan" />
-                    Download Manifest JSON
-                  </Button>
-
-                  <Button
-                    variant="primary"
-                    onClick={handleSubmitDistribution}
-                    className="w-full text-xs bg-neon-purple hover:bg-neon-purple/90 text-white"
-                  >
-                    <UploadCloud className="w-3.5 h-3.5 mr-1.5" />
-                    Dispatch to DSP Aggregator
-                  </Button>
-                </div>
-
-                {distributionSuccess && (
-                  <div className="p-3 bg-neon-green/10 border border-neon-green/30 rounded-xl text-[11px] text-neon-green flex items-center gap-2 animate-in fade-in">
-                    <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-                    <span>Package submitted to Spotify for Artists & Apple Music staging queue!</span>
+                <div className="p-3 bg-studio-950 rounded-xl border border-studio-800 space-y-1.5">
+                  <span className="text-[10px] font-mono text-studio-500 uppercase block">Shareable Permalink</span>
+                  <div className="flex items-center justify-between font-mono text-[11px] text-neon-cyan">
+                    <span>{publishResponse.share_url}</span>
+                    <a
+                      href={publishResponse.share_url}
+                      className="underline text-studio-300 hover:text-white"
+                    >
+                      View Song Page &rarr;
+                    </a>
                   </div>
-                )}
+                </div>
               </div>
             )}
           </div>

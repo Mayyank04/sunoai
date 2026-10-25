@@ -4,11 +4,17 @@ from sqlalchemy import select, desc
 from datetime import datetime, timezone
 from typing import Optional, List
 from backend.app.core.database import get_db
-from backend.app.core.security import get_current_user
+from backend.app.core.security import get_current_user, get_optional_current_user
 from backend.app.models.user import User
 from backend.app.models.playlist import Playlist, PlaylistTrack
 from backend.app.models.track import Track
-from backend.app.schemas.entities import PlaylistCreate, PlaylistUpdate, PlaylistRead, PlaylistTrackAdd
+from backend.app.schemas.entities import (
+    PlaylistCreate,
+    PlaylistUpdate,
+    PlaylistRead,
+    PlaylistTrackAdd,
+    PlaylistReorderRequest,
+)
 from backend.app.schemas.common import PaginatedResponse, StandardResponse
 
 router = APIRouter(prefix="/playlists", tags=["Playlists"])
@@ -66,14 +72,75 @@ async def list_playlists(
 @router.get("/{playlist_id}", response_model=PlaylistRead)
 async def get_playlist(
     playlist_id: str,
+    current_user: Optional[User] = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get playlist by ID."""
+    """Get playlist by ID with privacy enforcement."""
     res = await db.execute(select(Playlist).where(Playlist.id == playlist_id))
     playlist = res.scalar_one_or_none()
     if not playlist:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Playlist not found.")
+
+    # Privacy enforcement
+    is_owner = current_user and current_user.id == playlist.user_id
+    is_admin = current_user and current_user.role in ("admin", "moderator")
+    if not playlist.is_public and not (is_owner or is_admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This playlist is private and only viewable by its creator.",
+        )
+
     return PlaylistRead.model_validate(playlist)
+
+@router.put("/{playlist_id}", response_model=PlaylistRead)
+async def update_playlist(
+    playlist_id: str,
+    req: PlaylistUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update playlist title, description, cover image, and privacy toggle."""
+    res = await db.execute(select(Playlist).where(Playlist.id == playlist_id))
+    playlist = res.scalar_one_or_none()
+    if not playlist:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Playlist not found.")
+
+    if playlist.user_id != current_user.id and current_user.role not in ("admin", "moderator"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to edit this playlist.")
+
+    if req.title is not None:
+        playlist.title = req.title
+    if req.description is not None:
+        playlist.description = req.description
+    if req.cover_image_url is not None:
+        playlist.cover_image_url = req.cover_image_url
+    if req.is_public is not None:
+        playlist.is_public = req.is_public
+
+    playlist.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(playlist)
+    return PlaylistRead.model_validate(playlist)
+
+@router.delete("/{playlist_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_playlist(
+    playlist_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a playlist."""
+    res = await db.execute(select(Playlist).where(Playlist.id == playlist_id))
+    playlist = res.scalar_one_or_none()
+    if not playlist:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Playlist not found.")
+
+    if playlist.user_id != current_user.id and current_user.role not in ("admin", "moderator"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this playlist.")
+
+    await db.delete(playlist)
+    await db.commit()
+    return None
+
 
 @router.post("/{playlist_id}/tracks", response_model=StandardResponse)
 async def add_track_to_playlist(
@@ -146,3 +213,31 @@ async def remove_track_from_playlist(
         await db.commit()
 
     return StandardResponse(message="Track removed from playlist")
+
+@router.put("/{playlist_id}/reorder", response_model=StandardResponse)
+async def reorder_playlist_tracks(
+    playlist_id: str,
+    req: PlaylistReorderRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reorder tracks in a playlist based on provided list of track IDs."""
+    res = await db.execute(select(Playlist).where(Playlist.id == playlist_id))
+    playlist = res.scalar_one_or_none()
+    if not playlist:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Playlist not found.")
+
+    if playlist.user_id != current_user.id and current_user.role not in ("admin", "moderator"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to edit this playlist.")
+
+    pt_res = await db.execute(select(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist_id))
+    pts = {pt.track_id: pt for pt in pt_res.scalars().all()}
+
+    for index, track_id in enumerate(req.track_ids):
+        if track_id in pts:
+            pts[track_id].position = index
+
+    playlist.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return StandardResponse(message="Playlist tracks reordered successfully")
+
