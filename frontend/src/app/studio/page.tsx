@@ -45,6 +45,7 @@ import {
   TrackFxSettings,
 } from "@/lib/audioEngine";
 import PianoRoll, { MidiNote } from "@/components/studio/PianoRoll";
+import AiProducerPanel, { PlannedOperation } from "@/components/studio/AiProducerPanel";
 
 // --- Project Types ---
 interface AudioVersion {
@@ -267,6 +268,9 @@ export default function StudioPage() {
 
   // MIDI Piano Roll Modal
   const [activePianoRollClip, setActivePianoRollClip] = useState<TimelineClip | null>(null);
+
+  // AI Producer Panel (Phase 7)
+  const [showAiProducer, setShowAiProducer] = useState(true);
 
   // Undo / Redo History Stack
   const [undoStack, setUndoStack] = useState<TimelineTrack[][]>([]);
@@ -952,6 +956,184 @@ export default function StudioPage() {
     setSelectedTrackId(newTrack.id);
   };
 
+  // AI Producer Typed Operation Dispatcher (Phase 7)
+  const handleExecuteProducerOperation = useCallback(
+    (op: PlannedOperation) => {
+      if (op.operation_type === "addTrack") {
+        const newTrack: TimelineTrack = {
+          id: `tr_${Date.now()}`,
+          name: op.parameters.name || "New Producer Track",
+          trackType: (op.parameters.track_type as "audio" | "synth") || "audio",
+          volume: op.parameters.volume ?? 0.85,
+          pan: op.parameters.pan ?? 0.0,
+          muted: false,
+          solo: false,
+          armed: false,
+          color: op.parameters.color || (op.parameters.track_type === "synth" ? "#ec4899" : "#00f0ff"),
+          fx: { ...DEFAULT_FX_SETTINGS },
+          clips: [],
+        };
+        pushUndo([...tracks, newTrack]);
+        setStatusMessage(`AI Producer: Added ${newTrack.trackType} track "${newTrack.name}".`);
+      } else if (op.operation_type === "changeGain") {
+        const targetId = op.parameters.track_id;
+        const updated = tracks.map((t) => {
+          if (t.id === targetId || (!targetId && t === tracks[0])) {
+            const vol = op.parameters.volume !== undefined ? op.parameters.volume : t.volume;
+            const pan = op.parameters.pan !== undefined ? op.parameters.pan : t.pan;
+            audioDawEngine.updateTrackParams({
+              id: t.id,
+              volume: vol,
+              pan: pan,
+              muted: t.muted,
+              solo: t.solo,
+              fx: t.fx,
+            });
+            return { ...t, volume: vol, pan: pan };
+          }
+          return t;
+        });
+        pushUndo(updated);
+        setStatusMessage("AI Producer: Updated track gain and pan staging.");
+      } else if (op.operation_type === "addEffect") {
+        const targetId = op.parameters.track_id;
+        const efType = op.parameters.effect_type as keyof TrackFxSettings;
+        const updated = tracks.map((t) => {
+          if (t.id === targetId || (!targetId && t === tracks[0])) {
+            const newFx = { ...t.fx };
+            if (efType && op.parameters.params) {
+              newFx[efType] = { ...newFx[efType], ...op.parameters.params };
+            }
+            audioDawEngine.updateTrackParams({
+              id: t.id,
+              volume: t.volume,
+              pan: t.pan,
+              muted: t.muted,
+              solo: t.solo,
+              fx: newFx,
+            });
+            return { ...t, fx: newFx };
+          }
+          return t;
+        });
+        pushUndo(updated);
+        setStatusMessage(`AI Producer: Applied ${op.parameters.effect_type?.toUpperCase()} effect rack.`);
+      } else if (op.operation_type === "generateStem") {
+        const origTrack = tracks.find((t) => t.id === op.parameters.track_id) || tracks[0];
+        const stemType = (op.parameters.stem_type || "vocals").toUpperCase();
+        const newTrack: TimelineTrack = {
+          id: `tr_stem_${Date.now()}`,
+          name: `${origTrack?.name || "Track"} [${stemType} Stem - Demucs]`,
+          trackType: "audio",
+          volume: 0.9,
+          pan: 0.0,
+          muted: false,
+          solo: false,
+          armed: false,
+          color: stemType === "VOCALS" ? "#a855f7" : "#00f0ff",
+          fx: { ...DEFAULT_FX_SETTINGS },
+          clips: origTrack
+            ? origTrack.clips.map((c) => ({
+                ...c,
+                id: `c_stem_${Date.now()}_${c.id}`,
+                name: `${c.name} (${stemType})`,
+              }))
+            : [],
+        };
+        pushUndo([...tracks, newTrack]);
+        setStatusMessage(`AI Producer: Extracted ${stemType} stem with HTDemucs v4.`);
+      } else if (op.operation_type === "replaceSection") {
+        const targetTrackId = op.parameters.track_id;
+        const startSec = op.parameters.start_sec ?? 4.0;
+        const endSec = op.parameters.end_sec ?? 8.0;
+        const startBeat = Math.round((startSec * bpm) / 60);
+        const durationBeats = Math.max(2, Math.round(((endSec - startSec) * bpm) / 60));
+        const updated = tracks.map((t) => {
+          if (t.id === targetTrackId || (!targetTrackId && t === tracks[0])) {
+            const newClip: TimelineClip = {
+              id: `c_inpaint_${Date.now()}`,
+              trackId: t.id,
+              name: `AI Inpaint: ${op.parameters.prompt || "Regenerated Section"}`,
+              startBeat,
+              durationBeats,
+              sourceOffsetSec: 0,
+              color: "#f59e0b",
+            };
+            return { ...t, clips: [...t.clips, newClip] };
+          }
+          return t;
+        });
+        pushUndo(updated);
+        setStatusMessage("AI Producer: Completed section inpainting with crossfades.");
+      } else if (op.operation_type === "moveClip") {
+        const clipId = op.parameters.clip_id;
+        const newBeat = Math.max(0, op.parameters.new_start_beat ?? 0);
+        const updated = tracks.map((t) => ({
+          ...t,
+          clips: t.clips.map((c) =>
+            c.id === clipId || (!clipId && c === t.clips[0]) ? { ...c, startBeat: newBeat } : c
+          ),
+        }));
+        pushUndo(updated);
+        setStatusMessage(`AI Producer: Moved clip to beat ${newBeat}.`);
+      } else if (op.operation_type === "duplicateClip") {
+        const clipId = op.parameters.clip_id;
+        let found = false;
+        const updated = tracks.map((t) => {
+          const cIdx = t.clips.findIndex((c) => c.id === clipId || (!clipId && !found));
+          if (cIdx !== -1 && !found) {
+            found = true;
+            const orig = t.clips[cIdx];
+            const duplicate: TimelineClip = {
+              ...orig,
+              id: `c_${Date.now()}_dup`,
+              name: `${orig.name} (Copy)`,
+              startBeat: orig.startBeat + orig.durationBeats,
+            };
+            return { ...t, clips: [...t.clips, duplicate] };
+          }
+          return t;
+        });
+        pushUndo(updated);
+        setStatusMessage("AI Producer: Duplicated clip on timeline.");
+      } else if (op.operation_type === "splitClip") {
+        const clipId = op.parameters.clip_id;
+        const splitBeat = op.parameters.split_beat;
+        let splitDone = false;
+        const updated = tracks.map((t) => {
+          const clip = t.clips.find((c) => c.id === clipId || (!clipId && !splitDone));
+          if (!clip || splitDone) return t;
+          const cutPoint = splitBeat || clip.startBeat + clip.durationBeats / 2;
+          if (cutPoint <= clip.startBeat || cutPoint >= clip.startBeat + clip.durationBeats) return t;
+          splitDone = true;
+          const firstDuration = cutPoint - clip.startBeat;
+          const secondDuration = clip.durationBeats - firstDuration;
+          const firstClip: TimelineClip = { ...clip, durationBeats: firstDuration };
+          const secondClip: TimelineClip = {
+            ...clip,
+            id: `c_${Date.now()}_split`,
+            name: `${clip.name} (Part 2)`,
+            startBeat: cutPoint,
+            durationBeats: secondDuration,
+            sourceOffsetSec: clip.sourceOffsetSec + (firstDuration * 60) / bpm,
+          };
+          return {
+            ...t,
+            clips: t.clips.map((c) => (c.id === clip.id ? firstClip : c)).concat(secondClip),
+          };
+        });
+        pushUndo(updated);
+        setStatusMessage("AI Producer: Sliced clip at specified beat.");
+      } else if (op.operation_type === "deleteTrack") {
+        const targetId = op.parameters.track_id;
+        const updated = tracks.filter((t) => t.id !== targetId);
+        pushUndo(updated);
+        setStatusMessage("AI Producer: Removed track from arrangement.");
+      }
+    },
+    [tracks, bpm, pushUndo]
+  );
+
   const selectedTrack = tracks.find((t) => t.id === selectedTrackId);
 
   return (
@@ -1026,6 +1208,22 @@ export default function StudioPage() {
           </button>
 
           <button
+            onClick={() => setShowAiProducer(!showAiProducer)}
+            className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition border ${
+              showAiProducer
+                ? "bg-gradient-to-r from-neon-purple to-pink-500 text-white border-pink-500/40 shadow-lg shadow-pink-500/20"
+                : "bg-studio-800 hover:bg-studio-750 text-studio-300 border-studio-700"
+            }`}
+            title="Toggle AI Producer Panel (Phase 7)"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-pink-300" />
+            <span>AI Producer</span>
+            <span className="text-[10px] bg-studio-950/60 px-1.5 py-0.5 rounded font-mono">
+              Phase 7
+            </span>
+          </button>
+
+          <button
             onClick={handleSaveProject}
             disabled={isAutosaving}
             className="px-4 py-2 rounded-xl bg-neon-cyan hover:bg-cyan-400 text-studio-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-neon-cyan/20 transition"
@@ -1066,6 +1264,25 @@ export default function StudioPage() {
       {/* ======================================================== */}
       {activeTab === "multitrack" && (
         <div className="space-y-6">
+          {/* AI Producer Chat & Tool Execution Panel (Phase 7) */}
+          {showAiProducer && (
+            <div className="h-[460px] animate-in fade-in slide-in-from-top-2 duration-200">
+              <AiProducerPanel
+                projectState={{
+                  tracks,
+                  bpm,
+                  masterVolume,
+                  loopEnabled,
+                  projectId,
+                }}
+                onExecuteOperation={handleExecuteProducerOperation}
+                onUndoLastOperation={handleUndo}
+                canUndo={undoStack.length > 0}
+                onClose={() => setShowAiProducer(false)}
+              />
+            </div>
+          )}
+
           {/* Main DAW Transport Bar */}
           <div className="bg-studio-900 border border-studio-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-xl">
             {/* Left Transport: Play, Stop, Loop, Record, Undo/Redo */}

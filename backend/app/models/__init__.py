@@ -17,6 +17,9 @@ from backend.app.models.license import License
 from backend.app.models.payment import Payment
 from backend.app.models.moderation import Moderation, Report, AuditLog, AuditEvent
 
+from backend.app.models.persona import MusicPersona
+from backend.app.models.voice_model import VoiceModel, VoiceAuditLog
+
 Credit = CreditLedger
 Version = SongVersion
 
@@ -51,4 +54,7 @@ __all__ = [
     "Report",
     "AuditLog",
     "AuditEvent",
+    "MusicPersona",
+    "VoiceModel",
+    "VoiceAuditLog",
 ]

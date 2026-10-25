@@ -18,6 +18,9 @@ from backend.app.api.v1.social import router as social_router
 from backend.app.api.v1.licenses import router as licenses_router
 from backend.app.api.v1.payments import router as payments_router
 from backend.app.api.v1.reports import router as reports_router
+from backend.app.api.v1.producer import router as producer_router
+from backend.app.api.v1.personas import router as personas_router
+from backend.app.api.v1.voice_models import router as voice_models_router
 from backend.app.api.v1.admin import router as admin_router
 from backend.app.api.v1.health import router as health_router
 
@@ -40,6 +43,9 @@ api_v1_router.include_router(provenance_router)
 api_v1_router.include_router(daw_router)
 api_v1_router.include_router(editor_router)
 api_v1_router.include_router(voice_router)
+api_v1_router.include_router(producer_router)
+api_v1_router.include_router(personas_router)
+api_v1_router.include_router(voice_models_router)
 
 # Storage & Uploads
 api_v1_router.include_router(uploads_router)

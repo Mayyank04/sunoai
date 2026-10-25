@@ -10,7 +10,7 @@ from backend.app.main import app
 TEST_DB_FILE = "./test_fombo_temp.db"
 TEST_DATABASE_URL = f"sqlite+aiosqlite:///{TEST_DB_FILE}"
 
-test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+test_engine = create_async_engine(TEST_DATABASE_URL, echo=False, connect_args={"timeout": 60})
 test_session_maker = async_sessionmaker(
     bind=test_engine,
     class_=AsyncSession,
