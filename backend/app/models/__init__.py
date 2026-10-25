@@ -6,7 +6,7 @@ from backend.app.models.version import SongVersion
 from backend.app.models.asset import Asset
 from backend.app.models.job import Job
 from backend.app.models.stem import Stem
-from backend.app.models.lyric import Lyric
+from backend.app.models.lyric import Lyric, LyricVersion
 from backend.app.models.generation import Generation
 from backend.app.models.provenance import Provenance
 from backend.app.models.voice_consent import VoiceConsent

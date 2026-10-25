@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { apiRequest } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useAudioPlayer, TrackItem } from "@/context/AudioPlayerContext";
@@ -86,7 +87,7 @@ const MOODS = [
   "Epic & Triumphant",
 ];
 
-export default function CreateStudioPage() {
+function CreateStudioContent() {
   const { user, refreshUser } = useAuth();
   const { playTrack, currentTrack, isPlaying, togglePlay } = useAudioPlayer();
 
@@ -110,6 +111,22 @@ export default function CreateStudioPage() {
   const [musicalKey, setMusicalKey] = useState("F Minor");
   const [duration, setDuration] = useState(30);
   const [generateTwoVariants, setGenerateTwoVariants] = useState(true);
+
+  // URL query params synchronization
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const p = searchParams.get("prompt");
+    const g = searchParams.get("genre");
+    const k = searchParams.get("key");
+    const b = searchParams.get("bpm");
+    if (p) {
+      setPrompt(p);
+      setMakeInstrumental(false);
+    }
+    if (g) setGenre(g);
+    if (k) setMusicalKey(k);
+    if (b) setBpm(parseInt(b));
+  }, [searchParams]);
 
   // Provider State
   const [providers, setProviders] = useState<ProviderCap[]>([]);
@@ -993,5 +1010,13 @@ export default function CreateStudioPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function CreateStudioPage() {
+  return (
+    <Suspense fallback={<div className="py-12 text-center text-xs font-mono text-studio-500">Loading AI Composition Studio...</div>}>
+      <CreateStudioContent />
+    </Suspense>
   );
 }
