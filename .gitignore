@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/venv/
+venv/
+.venv/
+
+# Build & Cache
+.next/
+frontend/.next/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+test_fombo_temp.db
+
+# Storage artifacts (ignore dynamic runtime generations and uploads)
+storage_data/uploads/*
+storage_data/stems/*
+storage_data/tracks/*
+!storage_data/tracks/demo_*.wav
+
+# Environment & Local Secrets
+.env
+.env.local
+.env.*.local
+
+# OS Artifacts
+.DS_Store
+Thumbs.db
