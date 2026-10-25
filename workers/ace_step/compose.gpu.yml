@@ -1,0 +1,20 @@
+# Run from the repository root: docker compose -f workers/ace_step/compose.gpu.yml up --build -d
+services:
+  ace_step_gpu:
+    build:
+      context: ../..
+      dockerfile: workers/ace_step/Dockerfile
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      ACE_STEP_API_TOKEN: ${ACE_STEP_API_TOKEN:?Set a random service token of at least 24 characters}
+      ACE_STEP_OFFLOAD_CPU: "true"
+    volumes:
+      - ace_checkpoints:/models
+      - ace_jobs:/jobs
+    shm_size: "8gb"
+volumes:
+  ace_checkpoints:
+  ace_jobs:

@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from datetime import datetime, timezone
 from backend.app.core.database import get_db
-from backend.app.core.security import get_current_user
+from backend.app.core.security import get_current_user, get_optional_current_user
+from backend.app.core.rate_limiter import RateLimiter
 from backend.app.models.user import User
 from backend.app.models.lyric import Lyric, LyricVersion
 from backend.app.services.lyrics_service import lyrics_service
@@ -12,6 +13,8 @@ from backend.app.services.providers.registry import provider_registry
 from backend.app.schemas.lyrics import (
     LyricsGenerateRequest,
     LyricsResponse,
+    LyricsContinueRequest,
+    LyricsContinueResponse,
     LyricsRewriteLineRequest,
     LyricsRewriteLineResponse,
     LyricsRewriteSectionRequest,
@@ -37,11 +40,19 @@ router = APIRouter(prefix="/lyrics", tags=["Lyrics Intelligence Lab"])
 # 1. AI GENERATION & INTERACTIVE EDITING ENDPOINTS
 # ==============================================================================
 
-@router.post("/generate", response_model=LyricsResponse)
-async def generate_lyrics(req: LyricsGenerateRequest):
+@router.post(
+    "/generate",
+    response_model=LyricsResponse,
+    dependencies=[Depends(RateLimiter(times=60, seconds=60))]
+)
+async def generate_lyrics(
+    req: LyricsGenerateRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
     """
     Generates structured song lyrics in Hindi, English, Hinglish, Punjabi, or Spanish
-    with verse/chorus structure, syllable metrics, and phonetic rhyming.
+    with verse/chorus/bridge/outro structure, syllable metrics, and phonetic rhyming.
+    Supports LLM provider generation or built-in multilingual prosody engine.
     """
     # 1. Moderation check
     mod_check = lyrics_service.moderate_lyrics(req.topic)
@@ -51,6 +62,7 @@ async def generate_lyrics(req: LyricsGenerateRequest):
             detail=mod_check["explanation"]
         )
 
+    # 2. Generate lyrics with aliases and rich parameters
     result = lyrics_service.generate_lyrics(
         topic=req.topic,
         theme=req.theme or "Romance",
@@ -58,6 +70,10 @@ async def generate_lyrics(req: LyricsGenerateRequest):
         rhyme_scheme=req.rhyme_scheme or "AABB",
         language=req.language or "en",
         structure=req.structure,
+        song_structure=req.song_structure,
+        rhyme_style=req.rhyme_style,
+        stylistic_guidance=req.stylistic_guidance,
+        desired_length=req.desired_length or "medium",
         genre=req.genre or "Pop",
         mood=req.mood or "Romantic",
         bpm=req.bpm or 120,
@@ -69,6 +85,51 @@ async def generate_lyrics(req: LyricsGenerateRequest):
         persona=req.persona,
     )
     return LyricsResponse(**result)
+
+@router.post(
+    "/regenerate",
+    response_model=LyricsResponse,
+    dependencies=[Depends(RateLimiter(times=60, seconds=60))]
+)
+async def regenerate_lyrics(
+    req: LyricsGenerateRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """Regenerates a fresh variation of lyrics for the requested topic, genre, and language."""
+    return await generate_lyrics(req, current_user)
+
+@router.post(
+    "/continue",
+    response_model=LyricsContinueResponse,
+    dependencies=[Depends(RateLimiter(times=60, seconds=60))]
+)
+async def continue_lyrics(
+    req: LyricsContinueRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """
+    Seamlessly continues existing song lyrics by analyzing previous sections
+    and composing the next logical verse, chorus, bridge, or outro in matching meter.
+    """
+    # 1. Moderation check
+    mod_check = lyrics_service.moderate_lyrics(req.existing_lyrics)
+    if not mod_check["is_approved"]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=mod_check["explanation"]
+        )
+
+    res = lyrics_service.continue_lyrics(
+        existing_lyrics=req.existing_lyrics,
+        topic=req.topic,
+        genre=req.genre,
+        mood=req.mood,
+        language=req.language,
+        target_section=req.target_section,
+        rhyme_style=req.rhyme_style,
+        stylistic_guidance=req.stylistic_guidance,
+    )
+    return LyricsContinueResponse(**res)
 
 @router.post("/rewrite-line", response_model=LyricsRewriteLineResponse)
 async def rewrite_line(req: LyricsRewriteLineRequest):
@@ -89,6 +150,36 @@ async def rewrite_section(req: LyricsRewriteSectionRequest):
         section_name=req.section_name,
         section_lines=req.section_lines,
         instruction=req.instruction,
+        language=req.language,
+        topic=req.topic,
+        genre=req.genre,
+        mood=req.mood,
+    )
+    return LyricsRewriteSectionResponse(**res)
+
+@router.post("/rewrite-verse", response_model=LyricsRewriteSectionResponse)
+async def rewrite_verse(req: LyricsRewriteSectionRequest):
+    """Convenience endpoint specifically for rewriting a Verse section with narrative richness."""
+    sec_name = req.section_name if "verse" in req.section_name.lower() else f"Verse ({req.section_name})"
+    res = lyrics_service.rewrite_section(
+        section_name=sec_name,
+        section_lines=req.section_lines,
+        instruction=req.instruction or "more expressive and poetic",
+        language=req.language,
+        topic=req.topic,
+        genre=req.genre,
+        mood=req.mood,
+    )
+    return LyricsRewriteSectionResponse(**res)
+
+@router.post("/rewrite-chorus", response_model=LyricsRewriteSectionResponse)
+async def rewrite_chorus(req: LyricsRewriteSectionRequest):
+    """Convenience endpoint specifically for rewriting a Chorus section with anthemic catchiness."""
+    sec_name = "Chorus"
+    res = lyrics_service.rewrite_section(
+        section_name=sec_name,
+        section_lines=req.section_lines,
+        instruction=req.instruction or "more memorable, catchy anthemic hook",
         language=req.language,
         topic=req.topic,
         genre=req.genre,
@@ -491,6 +582,14 @@ async def connect_lyrics_to_music_model(
 
     caps = provider.get_capabilities()
 
+    # Dynamically query providers supporting vocals and lyrics
+    vocal_providers = [
+        p.provider_id for p in provider_registry._providers.values()
+        if p.get_capabilities().supports_vocals and p.get_capabilities().supports_lyrics
+    ]
+    if not vocal_providers:
+        vocal_providers = ["ace_step_1_5", "suno"]
+
     # Reject if provider does not support lyrics
     if not caps.supports_lyrics:
         raise HTTPException(
@@ -499,10 +598,10 @@ async def connect_lyrics_to_music_model(
                 "error_code": "LYRICS_UNSUPPORTED",
                 "message": (
                     f"Selected provider '{caps.display_name}' does not support lyrics synthesis. "
-                    "Only instrumental audio can be generated. Please select a vocal-capable provider (e.g. Suno Music API) to generate this song with singing lyrics."
+                    "Only instrumental audio can be generated. Please select a vocal-capable provider (e.g. ACE-Step 1.5 or Suno Music API) to generate this song with singing lyrics."
                 ),
                 "provider": req.provider,
-                "supported_providers": ["suno"],
+                "supported_providers": vocal_providers,
             }
         )
 
@@ -514,9 +613,10 @@ async def connect_lyrics_to_music_model(
                 "error_code": "VOCALS_UNSUPPORTED",
                 "message": (
                     f"Selected provider '{caps.display_name}' does not support singing voices. "
-                    "Please switch to Suno Music API to generate singing vocals."
+                    "Please switch to a vocal-capable provider (ACE-Step 1.5 or Suno) to generate singing vocals."
                 ),
                 "provider": req.provider,
+                "supported_providers": vocal_providers,
             }
         )
 

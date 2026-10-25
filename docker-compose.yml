@@ -66,6 +66,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - ACE_STEP_SERVICE_URL=${ACE_STEP_SERVICE_URL:-}
+      - ACE_STEP_API_TOKEN=${ACE_STEP_API_TOKEN:-}
+      - GENERATION_TIMEOUT_SECONDS=${GENERATION_TIMEOUT_SECONDS:-1800}
       - STORAGE_BACKEND=local
       - S3_ENDPOINT_URL=http://minio:9000
       - S3_ACCESS_KEY_ID=minioadmin
@@ -92,6 +95,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - ACE_STEP_SERVICE_URL=${ACE_STEP_SERVICE_URL:-}
+      - ACE_STEP_API_TOKEN=${ACE_STEP_API_TOKEN:-}
+      - GENERATION_TIMEOUT_SECONDS=${GENERATION_TIMEOUT_SECONDS:-1800}
       - STORAGE_BACKEND=local
       - S3_ENDPOINT_URL=http://minio:9000
       - S3_ACCESS_KEY_ID=minioadmin

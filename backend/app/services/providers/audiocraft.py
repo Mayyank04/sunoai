@@ -48,7 +48,7 @@ class AudiocraftMusicProvider(MusicGenerationProvider):
             models_available=["musicgen-small", "musicgen-medium", "musicgen-large", "musicgen-melody"],
             is_configured=is_ready,
             configuration_message=msg,
-            commercial_grade=True,
+            commercial_grade=False,
             attribution_required=True,
             provider_type="self_hosted",
             status_label="Ready" if is_ready else "Worker Offline",
@@ -134,10 +134,10 @@ class AudiocraftMusicProvider(MusicGenerationProvider):
 
     def get_license_metadata(self, tier: str = "creator") -> LicenseMetadata:
         return LicenseMetadata(
-            license_type="commercial_sync",
-            commercial_use_allowed=True,
-            monetization_allowed=True,
+            license_type="CC-BY-NC-4.0 (MusicGen weights)",
+            commercial_use_allowed=False,
+            monetization_allowed=False,
             attribution_required=True,
-            warranty_terms="Synthesized via Meta AudioCraft. Requires model architecture attribution on commercial distribution.",
+            warranty_terms="MusicGen checkpoints are noncommercial unless separately licensed. Synthesized via Meta AudioCraft. Requires model architecture attribution on commercial distribution.",
             c2pa_manifest_conforming=True,
         )

@@ -80,9 +80,12 @@ class Settings(BaseSettings):
     # Model Provider & Inference Configurations
     ENABLE_PROCEDURAL_SYNTH: bool = True
     ACE_STEP_SERVICE_URL: Optional[str] = None
+    ACE_STEP_NATIVE_PORT: Optional[int] = Field(default=None, ge=1, le=65535)
     ACE_STEP_WEIGHTS_PATH: Optional[str] = None
     ACE_STEP_API_TOKEN: Optional[str] = None
-    ACE_STEP_MODEL_REVISION: str = "v1.5.0-openweight"
+    ACE_STEP_MODEL_REVISION: str = "19671f406d603126926c1b7e2adc169acbcade22"
+    GENERATION_TIMEOUT_SECONDS: int = 1800
+    ACE_STEP_POLL_INTERVAL_SECONDS: float = 2.0
     HEARTMULA_SERVICE_URL: Optional[str] = None
     AUDIOCRAFT_SERVICE_URL: Optional[str] = None
     REPLICATE_API_TOKEN: Optional[str] = None
@@ -91,6 +94,15 @@ class Settings(BaseSettings):
     STABILITY_API_KEY: Optional[str] = None
     DEMUCS_SERVICE_URL: Optional[str] = None
     VOICE_SYNTH_SERVICE_URL: Optional[str] = None
+
+    # LLM Text Generation Configurations
+    LLM_PROVIDER: str = "auto"  # 'auto', 'openai', 'anthropic', 'ollama', or 'local_engine'
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_API_BASE: Optional[str] = None
+    ANTHROPIC_API_KEY: Optional[str] = None
+    OLLAMA_SERVICE_URL: Optional[str] = None
+    LOCAL_LLM_MODEL: str = "llama3"
 
     # Moderation & Safety
     MODERATION_STRICT_MODE: bool = True

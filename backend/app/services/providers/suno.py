@@ -46,7 +46,7 @@ class SunoMusicProvider(MusicGenerationProvider):
             models_available=["suno-v3.5", "suno-v3.0", "suno-v2.5"],
             is_configured=is_ready,
             configuration_message=msg,
-            commercial_grade=True,
+            commercial_grade=False,
             attribution_required=False,
             provider_type="commercial_api",
             status_label="Ready" if is_ready else "Needs Key",
@@ -125,10 +125,10 @@ class SunoMusicProvider(MusicGenerationProvider):
 
     def get_license_metadata(self, tier: str = "creator") -> LicenseMetadata:
         return LicenseMetadata(
-            license_type="commercial_master",
-            commercial_use_allowed=True,
-            monetization_allowed=True,
+            license_type="Unverified provider contract",
+            commercial_use_allowed=False,
+            monetization_allowed=False,
             attribution_required=False,
-            warranty_terms="Commercially cleared for streaming and sync distribution.",
+            warranty_terms="Commercial permissions require verified upstream service terms and account entitlements; a Fombo subscription does not grant provider rights.",
             c2pa_manifest_conforming=True,
         )

@@ -17,7 +17,7 @@ import {
 import { ProvenanceModal } from "@/components/provenance/ProvenanceModal";
 
 export const GlobalPlayer: React.FC = () => {
-  const { currentTrack, isPlaying, togglePlay, currentTime, duration, seek, volume, setVolume } =
+  const { currentTrack, isPlaying, playbackError, togglePlay, currentTime, duration, seek, volume, setVolume } =
     useAudioPlayer();
 
   const [isMuted, setIsMuted] = useState(false);
@@ -80,6 +80,7 @@ export const GlobalPlayer: React.FC = () => {
                 </span>
               )}
             </h4>
+            {playbackError && <p role="alert" title={playbackError} className="text-[11px] text-amber-400 truncate">{playbackError}</p>}
             <div className="flex items-center gap-2 text-xs text-studio-400 mt-0.5">
               <span>{currentTrack.genre || "Electronic"}</span>
               {currentTrack.bpm && <span>• {currentTrack.bpm} BPM</span>}

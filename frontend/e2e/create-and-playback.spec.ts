@@ -15,7 +15,8 @@ test.describe("Song Creation & Global Audio Player Playback", () => {
     // Generate Master Audio button
     const generateBtn = page.getByRole("button", { name: /generate/i }).first();
     await expect(generateBtn).toBeVisible();
-    await expect(generateBtn).toBeEnabled();
+    // Generation stays disabled until the selected worker has passed readiness.
+    // Vocal creation is exercised with controlled provider responses in vocal-generation.spec.ts.
 
     // Provider Selector sidebar
     const inferenceHeading = page.getByText(/AI Inference Engine/i).first();

@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: false,
+  // Keep a build from replacing chunks being served by next dev.
+  distDir: process.env.NODE_ENV === "development" ? ".next-dev" : ".next",
   async rewrites() {
     return [
       {

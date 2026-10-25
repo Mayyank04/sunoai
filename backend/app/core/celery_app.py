@@ -29,23 +29,26 @@ celery_app.conf.update(
     },
 )
 
-@celery_app.task(bind=True, max_retries=settings.MAX_JOB_RETRIES, default_retry_delay=5)
+@celery_app.task(bind=True, max_retries=0, time_limit=settings.GENERATION_TIMEOUT_SECONDS + 120)
 def run_audio_generation_task(self, job_id: str, payload: dict):
     """Celery background worker task for AI audio generation."""
-    logger.info("Executing generation task for job %s (attempt %s)", job_id, self.request.retries + 1)
-    try:
-        # In actual deployment, calls procedural DSP synthesizer or remote inference provider
-        return {
-            "status": "succeeded",
-            "job_id": job_id,
-            "progress": 100,
-            "message": "Generation completed via Celery worker",
-        }
-    except Exception as exc:
-        logger.error("Generation task failed for job %s: %s", job_id, exc)
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=settings.JOB_RETRY_BACKOFF_SECONDS ** self.request.retries)
-        raise exc
+    import asyncio
+    from backend.app.core import database as core_db
+    from backend.app.models.job import Job
+    from backend.app.services.job_runner import job_runner
+    from backend.app.services.providers.base import GenerationRequestParams
+    async def execute():
+        async with core_db.async_session_maker() as db:
+            job = await db.get(Job, job_id)
+            if not job or job.job_type != "generation":
+                raise ValueError("Persisted generation job not found.")
+            params = GenerationRequestParams.model_validate(job.payload)
+            user_id = job.user_id
+        await job_runner.execute_generation_job(job_id, user_id, params)
+        async with core_db.async_session_maker() as db:
+            job = await db.get(Job, job_id)
+            return {"job_id":job_id, "status":job.status, "result":job.result, "error_code":job.error_code}
+    return asyncio.run(execute())
 
 @celery_app.task(bind=True, max_retries=settings.MAX_JOB_RETRIES)
 def run_stem_separation_task(self, job_id: str, track_id: str):

@@ -46,7 +46,7 @@ class StabilityAudioProvider(MusicGenerationProvider):
             models_available=["stable-audio-open-1.0", "stable-audio-2.0"],
             is_configured=is_ready,
             configuration_message=msg,
-            commercial_grade=True,
+            commercial_grade=False,
             attribution_required=False,
             provider_type="commercial_api",
             status_label="Ready" if is_ready else "Needs Key",
@@ -107,10 +107,10 @@ class StabilityAudioProvider(MusicGenerationProvider):
 
     def get_license_metadata(self, tier: str = "creator") -> LicenseMetadata:
         return LicenseMetadata(
-            license_type="commercial_sync",
-            commercial_use_allowed=True,
-            monetization_allowed=True,
+            license_type="Unverified provider contract",
+            commercial_use_allowed=False,
+            monetization_allowed=False,
             attribution_required=False,
-            warranty_terms="Commercially cleared under Stability AI enterprise license.",
+            warranty_terms="Commercial permissions require verified upstream service terms and account entitlements; a Fombo subscription does not grant provider rights.",
             c2pa_manifest_conforming=True,
         )

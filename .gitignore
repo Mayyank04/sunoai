@@ -44,3 +44,10 @@ Thumbs.db
 # Test artifacts
 frontend/test-results/
 frontend/playwright-report/
+
+# Separate Next development and production outputs
+.next-dev/
+frontend/.next-dev/
+
+# Installed inference runtime, caches and checkpoints
+.runtime/

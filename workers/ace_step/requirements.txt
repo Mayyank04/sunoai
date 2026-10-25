@@ -1,5 +1,6 @@
-# ACE-Step 1.5 Inference Worker Dependencies
-fastapi>=0.110.0
-uvicorn>=0.28.0
-pydantic>=2.0.0
-httpx>=0.27.0
+# API/contract-test dependencies only. The GPU image installs the pinned upstream
+# project and its frozen uv.lock (CUDA PyTorch, ACE-Step, soundfile, transformers).
+fastapi>=0.110.0,<1
+uvicorn>=0.28.0,<1
+pydantic>=2.0.0,<3
+httpx>=0.27.0,<1

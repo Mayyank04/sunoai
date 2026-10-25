@@ -1,5 +1,20 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
+// Storage URLs returned by the API must follow an explicitly configured API origin.
+export function resolveMediaUrl(url: string): string {
+  if (url.startsWith("/api/v1/") && /^https?:\/\//i.test(API_BASE)) {
+    return new URL(url, API_BASE).href;
+  }
+  return url;
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public code?: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export interface ApiResponse<T = any> {
   data?: T;
   error?: string;
@@ -31,13 +46,18 @@ export async function apiRequest<T = any>(
 
   if (!response.ok) {
     let errorDetail = `HTTP ${response.status}: ${response.statusText}`;
+    let errorCode: string | undefined;
     try {
       const errorJson = await response.json();
-      errorDetail = errorJson.detail || errorJson.message || JSON.stringify(errorJson);
+      const detail = errorJson.detail ?? errorJson;
+      errorCode = detail?.error_code;
+      if (typeof detail === "string") errorDetail = detail;
+      else if (Array.isArray(detail)) errorDetail = detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+      else errorDetail = detail.message || detail.error || JSON.stringify(detail);
     } catch {
       // Non-JSON error body
     }
-    throw new Error(errorDetail);
+    throw new ApiError(errorDetail, response.status, errorCode);
   }
 
   if (response.status === 204) {

@@ -14,16 +14,16 @@ class GenerationCreateRequest(BaseModel):
     bpm: int = Field(default=120, ge=40, le=240)
     musical_key: str = Field(default="F Minor")
     duration_seconds: int = Field(default=30, ge=10, le=300)
-    provider: str = Field(default="fombo_procedural")
-    model_name: str = Field(default="procedural-dsp-v1")
+    provider: str = Field(default="ace_step_1_5")
+    model_name: Optional[str] = None
     seed: Optional[int] = None
     temperature: float = Field(default=1.0, ge=0.1, le=2.0)
     generate_two_variants: bool = Field(default=False)
     reference_audio_url: Optional[str] = None
 
 class GenerationEstimateRequest(BaseModel):
-    provider: str = Field(default="fombo_procedural")
-    model_name: str = Field(default="procedural-dsp-v1")
+    provider: str = Field(default="ace_step_1_5")
+    model_name: Optional[str] = None
     duration_seconds: int = Field(default=30, ge=10, le=300)
     generate_two_variants: bool = Field(default=False)
 
@@ -42,6 +42,8 @@ class GenerationStatusResponse(BaseModel):
     job_id: str
     status: str
     progress_percentage: int
+    current_stage: Optional[str] = None
+    remaining_balance: Optional[int] = None
     track_id: Optional[str] = None
     audio_url: Optional[str] = None
     second_audio_url: Optional[str] = None

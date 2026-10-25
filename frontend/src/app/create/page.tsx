@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, ApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useAudioPlayer, TrackItem } from "@/context/AudioPlayerContext";
 import {
@@ -34,6 +34,7 @@ interface ProviderCap {
   display_name: string;
   description: string;
   supports_text_to_audio: boolean;
+  supports_negative_prompt?: boolean;
   supports_audio_to_audio: boolean;
   supports_stems: boolean;
   supports_lyrics: boolean;
@@ -123,20 +124,40 @@ function CreateStudioContent() {
     const g = searchParams.get("genre");
     const k = searchParams.get("key");
     const b = searchParams.get("bpm");
+    const lyr = searchParams.get("lyrics") || (typeof window !== "undefined" ? sessionStorage.getItem("fombo_pending_lyrics") : null);
+    const prov = searchParams.get("provider") || (typeof window !== "undefined" ? sessionStorage.getItem("fombo_pending_provider") : null);
+
     if (p) {
       setPrompt(p);
-      setMakeInstrumental(false);
     }
     if (g) setGenre(g);
     if (k) setMusicalKey(k);
     if (b) setBpm(parseInt(b));
+
+    if (lyr) {
+      setLyrics(lyr);
+      setMakeInstrumental(false);
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem("fombo_pending_lyrics");
+      }
+    }
+
+    if (prov) {
+      setSelectedProviderId(prov);
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem("fombo_pending_provider");
+      }
+    } else if (lyr) {
+      setSelectedProviderId("ace_step_1_5");
+    }
   }, [searchParams]);
 
   // Provider State
   const [providers, setProviders] = useState<ProviderCap[]>([]);
-  const [selectedProviderId, setSelectedProviderId] = useState<string>("fombo_procedural");
-  const [selectedModel, setSelectedModel] = useState<string>("procedural-dsp-v1");
-  const [estimatedCredits, setEstimatedCredits] = useState<number>(5);
+  const [selectedProviderId, setSelectedProviderId] = useState<string>("ace_step_1_5");
+  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [estimatedCredits, setEstimatedCredits] = useState<number | null>(null);
+  const [providerReadiness, setProviderReadiness] = useState<{ provider_id: string; ready: boolean; message?: string } | null>(null);
 
   // Job Progress & Telemetry State
   const [isGenerating, setIsGenerating] = useState(false);
@@ -154,57 +175,62 @@ function CreateStudioContent() {
   const [variantB, setVariantB] = useState<TrackItem | null>(null);
   const [inspectProvenanceId, setInspectProvenanceId] = useState<string | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [isQuickGeneratingLyrics, setIsQuickGeneratingLyrics] = useState(false);
 
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const monitorEpochRef = useRef(0);
+  const jobStorageKey = user ? `fombo_active_generation_${user.id}` : null;
 
-  // Fetch Providers on Mount
+  // Preserve lyric-workspace selection while capabilities load.
   useEffect(() => {
     apiRequest<ProviderCap[]>("/generation/providers")
-      .then((data) => {
-        setProviders(data);
-        const procedural = data.find((p) => p.provider_id === "fombo_procedural");
-        if (procedural) {
-          setSelectedProviderId(procedural.provider_id);
-          setSelectedModel(procedural.models_available[0] || "procedural-dsp-v1");
-          setGenerateTwoVariants(procedural.supports_dual_variants);
-        }
-      })
-      .catch(() => {});
+      .then(setProviders)
+      .catch((err) => setErrorMessage(err.message || "Unable to load generation providers."));
   }, []);
 
-  // Update Selected Provider
-  const handleProviderSelect = (provId: string) => {
-    setSelectedProviderId(provId);
-    const p = providers.find((x) => x.provider_id === provId);
-    if (p) {
-      if (p.models_available.length > 0) {
-        setSelectedModel(p.models_available[0]);
-      }
-      if (!p.supports_dual_variants) {
-        setGenerateTwoVariants(false);
-      }
-      if (duration > p.max_duration_seconds) {
-        setDuration(p.max_duration_seconds);
-      } else if (duration < p.min_duration_seconds) {
-        setDuration(p.min_duration_seconds);
-      }
-    }
-  };
-
+  const handleProviderSelect = (provId: string) => setSelectedProviderId(provId);
   const activeProvider = providers.find((p) => p.provider_id === selectedProviderId);
+  const providerReady = providerReadiness?.provider_id === selectedProviderId && providerReadiness.ready;
 
-  // Estimate Credits when options change
+  // Every selection path (including transferred lyrics) selects a compatible checkpoint.
   useEffect(() => {
-    let cost = 5;
-    if (generateTwoVariants && activeProvider?.supports_dual_variants) {
-      cost += 3;
-    }
-    if (duration > 60) {
-      cost += 2;
-    }
-    setEstimatedCredits(cost);
-  }, [selectedProviderId, generateTwoVariants, duration, activeProvider]);
+    if (!activeProvider) return;
+    setSelectedModel((model) => activeProvider.models_available.includes(model) ? model : (activeProvider.models_available[0] || ""));
+    if (!activeProvider.supports_dual_variants) setGenerateTwoVariants(false);
+    setDuration((seconds) => Math.max(activeProvider.min_duration_seconds, Math.min(seconds, activeProvider.max_duration_seconds)));
+  }, [activeProvider]);
+
+  useEffect(() => {
+    if (!activeProvider) return;
+    let cancelled = false;
+    setProviderReadiness(null);
+    const check = async () => {
+      try {
+        const ready = await apiRequest<{ ready: boolean; message?: string }>(`/generation/providers/${selectedProviderId}/ready`);
+        if (!cancelled) setProviderReadiness({ provider_id: selectedProviderId, ...ready });
+      } catch (err) {
+        if (!cancelled) setProviderReadiness({ provider_id: selectedProviderId, ready: false, message: err instanceof Error ? err.message : "Unable to reach the generation worker." });
+      }
+    };
+    check();
+    const timer = setInterval(check, 30000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [selectedProviderId, activeProvider]);
+
+  // Display the same provider-specific price that the backend reserves.
+  useEffect(() => {
+    if (!user || !activeProvider || !selectedModel) { setEstimatedCredits(null); return; }
+    let cancelled = false;
+    setEstimatedCredits(null);
+    const timer = setTimeout(() => {
+      apiRequest<{ credits_required: number }>("/generation/estimate", {
+        method: "POST",
+        body: JSON.stringify({ provider: selectedProviderId, model_name: selectedModel, duration_seconds: duration, generate_two_variants: generateTwoVariants && activeProvider.supports_dual_variants }),
+      }).then((cost) => { if (!cancelled) setEstimatedCredits(cost.credits_required); })
+        .catch((err) => { if (!cancelled) setErrorMessage(err.message || "Unable to estimate generation credits."); });
+    }, 200);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [user, activeProvider, selectedProviderId, selectedModel, generateTwoVariants, duration]);
 
   // Instrument toggle
   const toggleInstrument = (inst: string) => {
@@ -222,24 +248,47 @@ function CreateStudioContent() {
     setMood(m);
   };
 
-  const cleanupJobMonitoring = () => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+  const handleQuickGenerateLyrics = async () => {
+    setIsQuickGeneratingLyrics(true);
+    setErrorMessage(null);
+    try {
+      const res = await apiRequest<{ title: string; raw_text: string }>("/lyrics/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          topic: prompt.slice(0, 120) || "Neon dreams and memories",
+          genre: genre || "Synthwave",
+          mood: mood || "Nostalgic",
+          language: "en",
+          desired_length: "medium",
+        }),
+      });
+      setLyrics(res.raw_text);
+      setMakeInstrumental(false);
+      if (selectedProviderId === "fombo_procedural") {
+        setSelectedProviderId("ace_step_1_5");
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to generate lyrics.");
+    } finally {
+      setIsQuickGeneratingLyrics(false);
     }
+  };
+
+  const cleanupJobMonitoring = () => {
+    monitorEpochRef.current += 1;
     if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
+      clearTimeout(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
   };
 
-  useEffect(() => {
-    return () => {
-      cleanupJobMonitoring();
-    };
-  }, []);
+  useEffect(() => () => cleanupJobMonitoring(), []);
 
-  const handleJobCompleted = (payload: {
+  const forgetActiveJob = () => {
+    if (jobStorageKey) localStorage.removeItem(jobStorageKey);
+  };
+
+  const handleJobCompleted = async (payload: {
     track_id: string;
     audio_url: string;
     second_audio_url?: string | null;
@@ -250,44 +299,24 @@ function CreateStudioContent() {
     setIsGenerating(false);
     setJobProgress(null);
     setActiveJobId(null);
+    forgetActiveJob();
     refreshUser();
-
-    if (payload.track_id && payload.audio_url) {
-      const trackA: TrackItem = {
-        id: payload.track_id,
-        title: `${genre} Opus ${musicalKey} (Take 1)`,
-        genre,
-        duration_seconds: payload.duration_seconds || duration,
-        audio_url: payload.audio_url,
-        waveform_data: payload.waveform,
-        bpm,
-        musical_key: musicalKey,
-        commercial_rights_status:
-          user?.role === "pro_producer" || user?.role === "studio"
-            ? "commercial_granted"
-            : "non_commercial_personal",
-      };
+    if (!payload.track_id || !payload.audio_url) {
+      setErrorMessage("The job reported completion without a playable track. Please check your library or contact support.");
+      return;
+    }
+    try {
+      // Use persisted metadata and rights, including when resuming after a reload.
+      const trackA = await apiRequest<TrackItem>(`/tracks/${payload.track_id}`);
       setVariantA(trackA);
       playTrack(trackA);
-
-      if (payload.second_audio_url) {
-        const trackB: TrackItem = {
-          id: `${payload.track_id}-take2`,
-          title: `${genre} Opus ${musicalKey} (Take 2 - Alternate Harmonics)`,
-          genre,
-          duration_seconds: payload.duration_seconds || duration,
-          audio_url: payload.second_audio_url,
-          bpm,
-          musical_key: musicalKey,
-          commercial_rights_status:
-            user?.role === "pro_producer" || user?.role === "studio"
-              ? "commercial_granted"
-              : "non_commercial_personal",
-        };
-        setVariantB(trackB);
-      } else {
-        setVariantB(null);
-      }
+      setVariantB(payload.second_audio_url ? {
+        ...trackA,
+        title: `${trackA.title} (Take 2)`,
+        audio_url: payload.second_audio_url,
+      } : null);
+    } catch (err) {
+      setErrorMessage(`Your track finished and is saved in your library, but its details could not be loaded. ${err instanceof Error ? err.message : "Try opening the library."}`);
     }
   };
 
@@ -296,6 +325,7 @@ function CreateStudioContent() {
     setIsGenerating(false);
     setJobProgress(null);
     setActiveJobId(null);
+    forgetActiveJob();
     setLastFailedJobId(jobId);
     setErrorMessage(errMessage || "Generation worker encountered an error.");
     refreshUser();
@@ -305,8 +335,9 @@ function CreateStudioContent() {
   const handleCancelJob = async () => {
     if (!activeJobId) return;
     try {
-      cleanupJobMonitoring();
       await apiRequest(`/generation/${activeJobId}/cancel`, { method: "POST" });
+      cleanupJobMonitoring();
+      forgetActiveJob();
       setIsGenerating(false);
       setJobProgress(null);
       setActiveJobId(null);
@@ -322,7 +353,7 @@ function CreateStudioContent() {
     if (!lastFailedJobId) return;
     setErrorMessage(null);
     setIsGenerating(true);
-    setJobProgress({ phase: "Enqueuing retry task...", progress: 5, current_stage: "Queued" });
+    setJobProgress({ phase: "Enqueuing retry task...", progress: 0, current_stage: "Queued" });
 
     try {
       const res = await apiRequest<{
@@ -333,6 +364,8 @@ function CreateStudioContent() {
 
       refreshUser();
       setActiveJobId(res.job_id);
+      if (jobStorageKey) localStorage.setItem(jobStorageKey, res.job_id);
+      setLastFailedJobId(null);
       attachStream(res.job_id);
     } catch (err: any) {
       setIsGenerating(false);
@@ -341,87 +374,75 @@ function CreateStudioContent() {
     }
   };
 
-  // Dual SSE Stream Listener & Polling Fallback
+  // Authenticated polling works across API origins and survives browser reloads.
+  // Native EventSource cannot send the bearer token used by this app.
   const attachStream = (jobId: string) => {
     cleanupJobMonitoring();
-
-    // 1. Setup Server-Sent Events (SSE) for zero-latency progress updates
-    try {
-      const eventSource = new EventSource(`/api/v1/jobs/${jobId}/stream`);
-      eventSourceRef.current = eventSource;
-
-      eventSource.addEventListener("progress", (evt) => {
-        try {
-          const payload = JSON.parse(evt.data);
-          setJobProgress({
-            phase: payload.phase ? payload.phase.replace(/_/g, " ") : "Processing",
-            progress: payload.progress_percentage || 25,
-            current_stage: payload.current_stage || "Synthesizing audio",
-          });
-        } catch {}
-      });
-
-      eventSource.addEventListener("complete", (evt) => {
-        try {
-          const payload = JSON.parse(evt.data);
-          handleJobCompleted(payload);
-        } catch {}
-      });
-
-      eventSource.addEventListener("error", () => {
-        // SSE disconnected or closed; smoothly transition to polling fallback without interrupting user
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-          eventSourceRef.current = null;
-        }
-      });
-    } catch {
-      // EventSource not supported or failed to construct; polling fallback will handle status
-    }
-
-    // 2. Setup Active Polling Fallback (ensures completion even if SSE is interrupted or proxied)
-    pollIntervalRef.current = setInterval(async () => {
+    const epoch = monitorEpochRef.current;
+    let failures = 0;
+    const poll = async () => {
       try {
-        const statusData = await apiRequest<{
-          job_id: string;
+        const result = await apiRequest<{
           status: string;
-          progress_percentage?: number;
+          progress_percentage: number;
+          current_stage?: string;
           track_id?: string;
           audio_url?: string;
           second_audio_url?: string;
           duration_seconds?: number;
-          error_code?: string;
           error_message?: string;
         }>(`/generation/${jobId}/status`);
-
-        if (statusData.status === "completed" || statusData.status === "succeeded") {
-          handleJobCompleted({
-            track_id: statusData.track_id!,
-            audio_url: statusData.audio_url!,
-            second_audio_url: statusData.second_audio_url,
-            duration_seconds: statusData.duration_seconds,
-          });
-        } else if (statusData.status === "failed") {
-          handleJobFailed(jobId, statusData.error_message || "Generation worker encountered an error.");
-        } else if (statusData.status === "cancelled") {
-          cleanupJobMonitoring();
-          setIsGenerating(false);
-          setJobProgress(null);
-          setActiveJobId(null);
-          setErrorMessage("Generation task was cancelled.");
-          refreshUser();
-        } else if (statusData.progress_percentage) {
-          setJobProgress((prev) => ({
-            phase: statusData.status === "processing" ? "Synthesizing audio harmonics" : (prev?.phase || "In queue"),
-            progress: Math.max(prev?.progress || 10, statusData.progress_percentage || 20),
-            current_stage: prev?.current_stage || "Rendering soundscape",
-          }));
+        if (epoch !== monitorEpochRef.current) return;
+        failures = 0;
+        if (result.status === "completed" || result.status === "succeeded") {
+          handleJobCompleted({ ...result, track_id: result.track_id!, audio_url: result.audio_url! });
+          return;
         }
-      } catch {
-        // Polling retry on next interval tick
+        if (result.status === "failed") {
+          handleJobFailed(jobId, result.error_message || "Generation failed. Check your credit balance for the refund.");
+          return;
+        }
+        if (result.status === "cancelled" || result.status === "canceled") {
+          cleanupJobMonitoring(); forgetActiveJob();
+          setIsGenerating(false); setJobProgress(null); setActiveJobId(null);
+          setErrorMessage("Generation was cancelled. Your credit balance has been refreshed.");
+          refreshUser();
+          return;
+        }
+        setJobProgress({
+          phase: result.status,
+          progress: result.progress_percentage ?? 0,
+          current_stage: result.current_stage || (result.status === "queued" ? "Waiting for the worker" : "Generating audio"),
+        });
+      } catch (err) {
+        if (epoch !== monitorEpochRef.current) return;
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) {
+          cleanupJobMonitoring();
+          setIsGenerating(false); setJobProgress(null); setActiveJobId(null);
+          if (err.status === 404) forgetActiveJob();
+          setErrorMessage(`Unable to monitor this job: ${err.message}`);
+          return;
+        }
+        failures += 1;
+        if (failures >= 3) setJobProgress((previous) => ({ phase: "Connection interrupted", progress: previous?.progress ?? 0, current_stage: "Reconnecting to job status. The result is not yet known." }));
       }
-    }, 2000);
+      if (epoch === monitorEpochRef.current) pollIntervalRef.current = setTimeout(poll, 2000);
+    };
+    poll();
   };
+
+  useEffect(() => {
+    if (!jobStorageKey) { cleanupJobMonitoring(); setIsGenerating(false); setActiveJobId(null); setJobProgress(null); return; }
+    const savedJob = localStorage.getItem(jobStorageKey);
+    if (savedJob) {
+      setActiveJobId(savedJob); setIsGenerating(true);
+      setJobProgress({ phase: "Restoring job", progress: 0, current_stage: "Checking saved generation" });
+      attachStream(savedJob);
+    }
+    return () => cleanupJobMonitoring();
+    // The monitor is bound to the signed-in account; option edits must not restart it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobStorageKey]);
 
   // Submit Generation Request
   const handleGenerate = async (e: React.FormEvent) => {
@@ -437,11 +458,20 @@ function CreateStudioContent() {
       return;
     }
 
+    setLastFailedJobId(null);
+    if (!activeProvider || !providerReady) {
+      setErrorMessage(providerReadiness?.message || "The selected generation worker is not ready. No credits have been reserved.");
+      return;
+    }
+    if (!makeInstrumental && !lyrics.trim()) {
+      setErrorMessage("Enter or generate lyrics for the singer before creating a vocal song.");
+      return;
+    }
     // Client-side Capability Validation Checks
     if (activeProvider) {
-      if (lyrics.trim() && !activeProvider.supports_lyrics) {
+      if (!makeInstrumental && lyrics.trim() && !activeProvider.supports_lyrics) {
         setErrorMessage(
-          `Provider '${activeProvider.display_name}' does not support lyrics synthesis. Please clear lyrics or switch to a lyric-capable provider (e.g. Suno).`
+          `Provider '${activeProvider.display_name}' does not support lyrics synthesis. Please clear lyrics or select a ready provider that supports lyrics and singing.`
         );
         return;
       }
@@ -456,7 +486,7 @@ function CreateStudioContent() {
     setIsGenerating(true);
     setJobProgress({
       phase: "Submitting generation task...",
-      progress: 5,
+      progress: 0,
       current_stage: "Validating provider constraints",
     });
 
@@ -470,7 +500,7 @@ function CreateStudioContent() {
         method: "POST",
         body: JSON.stringify({
           prompt,
-          negative_prompt: mode === "custom" ? negativePrompt : undefined,
+          negative_prompt: mode === "custom" && activeProvider?.supports_negative_prompt ? negativePrompt : undefined,
           make_instrumental: makeInstrumental,
           lyrics: !makeInstrumental && lyrics.trim() ? lyrics : undefined,
           genre,
@@ -489,11 +519,8 @@ function CreateStudioContent() {
       refreshUser();
       const jobId = res.job_id;
       setActiveJobId(jobId);
-      setJobProgress({
-        phase: "Queued in audio inference cluster...",
-        progress: 15,
-        current_stage: "Synthesizing audio harmonics",
-      });
+      if (jobStorageKey) localStorage.setItem(jobStorageKey, jobId);
+      setJobProgress({ phase: "Queued", progress: 0, current_stage: "Waiting for the generation worker" });
 
       attachStream(jobId);
     } catch (err: any) {
@@ -519,7 +546,7 @@ function CreateStudioContent() {
             AI Music Creation Studio
           </h1>
           <p className="text-xs md:text-sm text-studio-400 mt-1">
-            Real asynchronous AI music synthesis with verified provider governance and C2PA provenance.
+            Generate music with clear model readiness, saved recordings, and generation provenance.
           </p>
         </div>
 
@@ -560,7 +587,7 @@ function CreateStudioContent() {
               <div>
                 <strong className="font-semibold block mb-0.5">Generation Engine Not Configured</strong>
                 <p>
-                  Inference worker for &quot;{activeProvider.display_name}&quot; is not connected. Connect an actual self-hosted GPU worker (e.g. RunPod, Modal, or local Torch node) or switch to the built-in CC0 Procedural Synthesizer to compose audio.
+                  Inference worker for &quot;{activeProvider.display_name}&quot; is not connected. Connect the ACE-Step GPU worker to generate singing. The procedural provider supports instrumental audio only.
                 </p>
                 {activeProvider.configuration_message && (
                   <p className="mt-1 font-mono text-[11px] text-amber-400/80">
@@ -632,12 +659,52 @@ function CreateStudioContent() {
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold uppercase font-mono tracking-wider text-studio-300 flex items-center gap-2">
                   <FileText className="w-4 h-4 text-neon-pink" />
-                  Optional Lyrics & Song Structure
+                  Lyrics & Vocal Phrasing
                 </label>
-                <span className="text-[11px] font-mono text-studio-500">
-                  {lyrics.length} / 5000 chars
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleQuickGenerateLyrics}
+                    disabled={isQuickGeneratingLyrics}
+                    className="px-2.5 py-1 rounded-lg bg-neon-purple/20 hover:bg-neon-purple/30 text-neon-purple border border-neon-purple/40 text-[11px] font-mono flex items-center gap-1.5 transition disabled:opacity-50"
+                  >
+                    <Sparkles className={`w-3 h-3 ${isQuickGeneratingLyrics ? "animate-spin" : ""}`} />
+                    <span>{isQuickGeneratingLyrics ? "Generating..." : "AI Generate"}</span>
+                  </button>
+                  <a
+                    href="/lyrics"
+                    target="_blank"
+                    className="text-[11px] font-mono text-neon-cyan hover:underline hidden sm:inline"
+                  >
+                    Full Studio ↗
+                  </a>
+                  <span className="text-[11px] font-mono text-studio-500">
+                    {lyrics.length} / 5000
+                  </span>
+                </div>
               </div>
+
+              {/* Capability Warning if lyrics are present but provider is instrumental-only */}
+              {lyrics.trim() && activeProvider && (!activeProvider.supports_lyrics || !activeProvider.supports_vocals) && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 font-mono">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    <span>
+                      <strong>{activeProvider.display_name}</strong> is instrumental-only. Select ACE-Step 1.5 and connect its GPU worker to sing these lyrics.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedProviderId("ace_step_1_5");
+                    }}
+                    className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-bold whitespace-nowrap self-start sm:self-auto transition"
+                  >
+                    Switch to ACE-Step 1.5
+                  </button>
+                </div>
+              )}
+
               <textarea
                 value={lyrics}
                 onChange={(e) => setLyrics(e.target.value)}
@@ -646,7 +713,7 @@ function CreateStudioContent() {
                 className="w-full bg-studio-950 border border-studio-800 rounded-xl p-3 text-xs text-studio-100 placeholder-studio-600 focus:outline-none focus:border-neon-pink/50 transition font-mono resize-y"
               />
               <p className="text-[11px] text-studio-500">
-                Tip: Structure lyrics using tags like [Verse], [Chorus], [Bridge], [Outro] for optimal phrasing.
+                Tip: Structure lyrics using tags like [Verse], [Chorus], [Bridge], [Outro]. A ready vocal model sings the supplied lyrics together with the musical arrangement.
               </p>
             </div>
           )}
@@ -743,7 +810,7 @@ function CreateStudioContent() {
           </div>
 
           {/* Custom Mode Extra Controls */}
-          {mode === "custom" && (
+          {mode === "custom" && activeProvider?.supports_negative_prompt && (
             <>
               {/* Instruments Multi-Select */}
               <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 space-y-3 shadow-xl">
@@ -849,7 +916,7 @@ function CreateStudioContent() {
                   Dual Output Variants (Take 1 & Take 2)
                 </span>
                 <p className="text-[11px] text-studio-400">
-                  Synthesize two distinct harmonic variations simultaneously (+3 credits).
+                  Generate two takes. The total credit cost is shown before submission.
                 </p>
               </div>
               <input
@@ -885,16 +952,18 @@ function CreateStudioContent() {
           <div className="flex gap-3">
             <button
               type="submit"
-              disabled={isGenerating || (activeProvider ? !activeProvider.is_configured : false)}
+              disabled={isGenerating || !activeProvider || !providerReady || (!!user && estimatedCredits === null)}
               className="flex-1 py-4 rounded-2xl bg-gradient-to-r from-neon-cyan via-neon-purple to-neon-pink text-studio-950 font-bold text-sm tracking-wide uppercase hover:opacity-95 active:scale-[0.99] disabled:opacity-50 transition shadow-xl shadow-neon-cyan/20 flex items-center justify-center gap-2"
             >
               <Sparkles className="w-4 h-4 fill-current" />
               <span>
                 {isGenerating
                   ? "Synthesizing Audio..."
-                  : activeProvider && !activeProvider.is_configured
-                  ? "Generation Engine Not Configured"
-                  : `Generate Master Audio (${estimatedCredits} Credits)`}
+                  : !providerReadiness
+                  ? "Checking Generation Engine..."
+                  : !providerReady
+                  ? "Generation Engine Unavailable"
+                  : user ? `Generate Master Audio (${estimatedCredits ?? "…"} Credits)` : "Sign in to Generate Music"}
               </span>
             </button>
 
@@ -935,17 +1004,17 @@ function CreateStudioContent() {
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-studio-200">{p.display_name}</span>
-                      {p.is_configured ? (
+                      {isSelected && providerReady ? (
                         <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono">
                           <CheckCircle2 className="w-3 h-3" /> Ready
                         </span>
-                      ) : p.status_label === "Worker Offline" || p.provider_type === "self_hosted" ? (
+                      ) : p.provider_type === "self_hosted" ? (
                         <span className="flex items-center gap-1 text-[10px] text-amber-400 font-mono">
-                          <AlertCircle className="w-3 h-3" /> Worker Offline
+                          <AlertCircle className="w-3 h-3" /> {isSelected ? (providerReadiness ? "Unavailable" : "Checking") : "GPU Worker"}
                         </span>
                       ) : (
                         <span className="flex items-center gap-1 text-[10px] text-amber-400 font-mono">
-                          <AlertCircle className="w-3 h-3" /> Needs Key
+                          <AlertCircle className="w-3 h-3" /> {p.is_configured ? "Configured" : "Needs Setup"}
                         </span>
                       )}
                     </div>
@@ -975,6 +1044,14 @@ function CreateStudioContent() {
                 );
               })}
             </div>
+
+            {activeProvider && (
+              <p role="status" className="text-[11px] font-mono text-studio-400">
+                {providerReadiness?.provider_id === selectedProviderId
+                  ? providerReadiness.message || (providerReady ? "Generation worker is ready." : activeProvider.configuration_message || "Generation engine unavailable. No credits will be charged.")
+                  : "Checking generation worker…"}
+              </p>
+            )}
 
             {/* Model Checkpoint Dropdown */}
             {activeProvider && activeProvider.models_available.length > 0 && (
@@ -1042,11 +1119,11 @@ function CreateStudioContent() {
                 <button
                   type="button"
                   onClick={() =>
-                    isPlaying && currentTrack?.id === variantA.id ? togglePlay() : playTrack(variantA)
+                    isPlaying && currentTrack?.id === variantA.id && currentTrack?.audio_url === variantA.audio_url ? togglePlay() : playTrack(variantA)
                   }
                   className="flex-1 py-2.5 rounded-xl bg-neon-cyan text-studio-950 font-bold text-xs flex items-center justify-center gap-2 transition hover:opacity-90"
                 >
-                  {isPlaying && currentTrack?.id === variantA.id ? (
+                  {isPlaying && currentTrack?.id === variantA.id && currentTrack?.audio_url === variantA.audio_url ? (
                     <>
                       <Pause className="w-4 h-4 fill-current" /> Pause
                     </>
@@ -1074,6 +1151,8 @@ function CreateStudioContent() {
             </div>
           )}
 
+          {variantA && <a href="/library" className="block text-center text-xs font-mono text-neon-cyan hover:underline">Open saved songs in your library →</a>}
+
           {/* Variant B Result Card (If Dual Variants Generated) */}
           {variantB && (
             <div className="bg-gradient-to-br from-studio-900 to-studio-850 border border-neon-purple/30 rounded-2xl p-5 space-y-4 shadow-2xl">
@@ -1097,11 +1176,11 @@ function CreateStudioContent() {
                 <button
                   type="button"
                   onClick={() =>
-                    isPlaying && currentTrack?.id === variantB.id ? togglePlay() : playTrack(variantB)
+                    isPlaying && currentTrack?.id === variantB.id && currentTrack?.audio_url === variantB.audio_url ? togglePlay() : playTrack(variantB)
                   }
                   className="flex-1 py-2.5 rounded-xl bg-neon-purple text-white font-bold text-xs flex items-center justify-center gap-2 transition hover:opacity-90"
                 >
-                  {isPlaying && currentTrack?.id === variantB.id ? (
+                  {isPlaying && currentTrack?.id === variantB.id && currentTrack?.audio_url === variantB.audio_url ? (
                     <>
                       <Pause className="w-4 h-4 fill-current" /> Pause
                     </>

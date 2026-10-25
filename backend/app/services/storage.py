@@ -176,6 +176,9 @@ class StorageService:
     def save_bytes(self, data: bytes, subfolder: str, filename: str) -> Tuple[str, str]:
         """Save raw bytes to storage and return storage key and URL."""
         storage_key = f"{subfolder}/{filename}"
+        if self._s3_client:
+            self._s3_client.put_object(Bucket=self.bucket, Key=storage_key, Body=data, ContentType="audio/wav")
+            return storage_key, self.generate_presigned_download_url(storage_key)
         local_path = self.get_local_path(storage_key)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, "wb") as f:

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, resolveMediaUrl } from "@/lib/api";
 import { useAudioPlayer, TrackItem } from "@/context/AudioPlayerContext";
 import {
   FolderHeart,
@@ -20,13 +20,15 @@ export default function LibraryPage() {
   const { playTrack, currentTrack, isPlaying, togglePlay } = useAudioPlayer();
   const [tracks, setTracks] = useState<TrackItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [inspectProvenanceId, setInspectProvenanceId] = useState<string | null>(null);
 
   const loadTracks = () => {
     setLoading(true);
+    setErrorMessage(null);
     apiRequest<{ tracks: TrackItem[] }>("/library/tracks?limit=50")
       .then((res) => setTracks(res.tracks || []))
-      .catch(() => {})
+      .catch((error) => setErrorMessage(error.message || "Unable to load your library."))
       .finally(() => setLoading(false));
   };
 
@@ -39,7 +41,7 @@ export default function LibraryPage() {
     try {
       await apiRequest(`/library/tracks/${trackId}`, { method: "DELETE" });
       setTracks((prev) => prev.filter((t) => t.id !== trackId));
-    } catch {}
+    } catch (error: any) { setErrorMessage(error.message || "Unable to delete the track."); }
   };
 
   return (
@@ -64,11 +66,13 @@ export default function LibraryPage() {
         </a>
       </div>
 
+      {errorMessage && <p role="alert" className="text-sm text-red-400">{errorMessage}</p>}
+
       {/* Library Table / List */}
       <div className="bg-studio-900 border border-studio-800 rounded-2xl overflow-hidden shadow-xl">
         <div className="p-4 border-b border-studio-800 flex items-center justify-between text-xs font-mono text-studio-400 uppercase font-semibold">
           <span>{tracks.length} Master Recordings</span>
-          <span>Provenance Verified</span>
+          <span>Saved Recordings</span>
         </div>
 
         {loading ? (
@@ -141,7 +145,7 @@ export default function LibraryPage() {
                       <Sliders className="w-4 h-4" />
                     </a>
                     <a
-                      href={track.audio_url}
+                      href={resolveMediaUrl(track.audio_url)}
                       download={`${track.title}.wav`}
                       className="p-2 rounded-lg bg-studio-800 hover:bg-studio-750 text-studio-300 transition"
                       title="Download Master WAV"

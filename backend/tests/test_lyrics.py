@@ -227,3 +227,97 @@ async def test_capability_governance_send_to_music(client: AsyncClient, auth_hea
     resp_suno = await client.post("/api/v1/lyrics/send-to-music", json=payload_suno, headers=auth_headers)
     assert resp_suno.status_code == 200
     assert resp_suno.json()["status"] == "ready_for_generation"
+
+    # 3. ACE-Step 1.5 provider DOES support lyrics & vocals -> Succeeds with status ready_for_generation
+    payload_acestep = {
+        "title": "ACE-Step Vocal Track",
+        "lyrics": "[Chorus]\nSinging clearly through the open-weight model",
+        "provider": "ace_step_1_5",
+        "genre": "Synthwave",
+        "duration_seconds": 30,
+        "vocal_style": "Melodic Female",
+    }
+    resp_ace = await client.post("/api/v1/lyrics/send-to-music", json=payload_acestep, headers=auth_headers)
+    assert resp_ace.status_code == 200
+    assert resp_ace.json()["status"] == "ready_for_generation"
+    assert resp_ace.json()["provider"] == "ace_step_1_5"
+
+@pytest.mark.asyncio
+async def test_api_unversioned_lyrics_generate_and_continue(client: AsyncClient, auth_headers: dict):
+    """Verifies POST /api/lyrics/generate and POST /api/lyrics/continue endpoints."""
+    # 1. Hindi generation with custom structure & length
+    payload_hi = {
+        "topic": "सफर और उम्मीद",
+        "language": "hi",
+        "genre": "Bollywood Pop",
+        "mood": "Soulful",
+        "song_structure": ["Verse 1", "Chorus", "Outro"],
+        "rhyme_style": "AABB",
+        "stylistic_guidance": "Deep emotional metaphors of nature and rain",
+        "desired_length": "short",
+    }
+    resp_hi = await client.post("/api/lyrics/generate", json=payload_hi)
+    assert resp_hi.status_code == 200
+    data_hi = resp_hi.json()
+    assert data_hi["language"] == "hi"
+    assert len(data_hi["sections"]) == 3
+    assert data_hi["sections"][0]["section_name"] == "Verse 1"
+    assert data_hi["sections"][1]["section_name"] == "Chorus"
+    assert data_hi["sections"][2]["section_name"] == "Outro"
+
+    # 2. Punjabi generation with desired length long
+    payload_pa = {
+        "topic": "ਪੰਜਾਬੀ ਸ਼ਾਨ",
+        "language": "pa",
+        "genre": "Bhangra",
+        "mood": "High Energy",
+        "desired_length": "long",
+        "rhyme_style": "AABB",
+    }
+    resp_pa = await client.post("/api/lyrics/generate", json=payload_pa)
+    assert resp_pa.status_code == 200
+    data_pa = resp_pa.json()
+    assert data_pa["language"] == "pa"
+    assert len(data_pa["sections"]) >= 5
+
+    # 3. Continue Lyrics
+    continue_payload = {
+        "existing_lyrics": data_hi["raw_text"],
+        "topic": "सफर और उम्मीद",
+        "language": "hi",
+        "target_section": "Bridge",
+        "rhyme_style": "AABB",
+    }
+    resp_cont = await client.post("/api/lyrics/continue", json=continue_payload)
+    assert resp_cont.status_code == 200
+    data_cont = resp_cont.json()
+    assert "[Bridge]" in data_cont["continued_lyrics"]
+    assert data_cont["added_section_name"] == "Bridge"
+    assert len(data_cont["added_lines"]) > 0
+
+    # 4. Regenerate Lyrics
+    resp_regen = await client.post("/api/lyrics/regenerate", json=payload_hi)
+    assert resp_regen.status_code == 200
+    assert resp_regen.json()["language"] == "hi"
+
+    # 5. Rewrite Verse and Rewrite Chorus
+    verse_rewrite_payload = {
+        "section_name": "Verse 1",
+        "section_lines": [l["text"] for l in data_hi["sections"][0]["lines"]],
+        "instruction": "more poetic and soulful",
+        "language": "hi",
+    }
+    resp_rw_v = await client.post("/api/lyrics/rewrite-verse", json=verse_rewrite_payload)
+    assert resp_rw_v.status_code == 200
+    assert len(resp_rw_v.json()["lines"]) == len(verse_rewrite_payload["section_lines"])
+
+    chorus_rewrite_payload = {
+        "section_name": "Chorus",
+        "section_lines": [l["text"] for l in data_hi["sections"][1]["lines"]],
+        "instruction": "anthemic stadium hook",
+        "language": "hi",
+    }
+    resp_rw_c = await client.post("/api/lyrics/rewrite-chorus", json=chorus_rewrite_payload)
+    assert resp_rw_c.status_code == 200
+    assert len(resp_rw_c.json()["lines"]) == len(chorus_rewrite_payload["section_lines"])
+

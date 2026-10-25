@@ -7,6 +7,7 @@ class ProviderCapabilities(BaseModel):
     display_name: str
     description: str = ""
     supports_text_to_audio: bool = True
+    supports_negative_prompt: bool = False
     supports_audio_to_audio: bool = False
     supports_stems: bool = False
     supports_lyrics: bool = False
@@ -146,6 +147,9 @@ class MusicGenerationProvider(ABC):
     # CamelCase alias
     def getLicenseMetadata(self, tier: str = "creator") -> LicenseMetadata:
         return self.get_license_metadata(tier)
+
+    async def generate_with_progress(self, params, job_id, on_progress=None):
+        return await self.generate(params)
 
     async def check_health(self) -> Dict[str, Any]:
         """Checks runtime health of this provider backend."""

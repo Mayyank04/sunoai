@@ -13,13 +13,17 @@ class LyricSection(BaseModel):
 
 class LyricsGenerateRequest(BaseModel):
     topic: str = Field(min_length=2, max_length=500)
-    theme: Optional[str] = "Love & Longing"
-    tone: Optional[str] = "Emotional"
-    rhyme_scheme: Optional[str] = "AABB"
-    language: str = Field(default="en", description="'en', 'hi', 'hinglish', 'pa', 'es'")
-    structure: Optional[List[str]] = None
     genre: Optional[str] = "Bollywood Pop"
     mood: Optional[str] = "Romantic"
+    language: str = Field(default="en", description="'en', 'hi', 'hinglish', 'pa', 'es'")
+    song_structure: Optional[List[str]] = Field(default=None, description="Optional custom song structure sections")
+    structure: Optional[List[str]] = None  # alias for backward compat
+    rhyme_style: Optional[str] = Field(default=None, description="'AABB', 'ABAB', 'AAAA', 'Free Verse'")
+    rhyme_scheme: Optional[str] = "AABB"  # alias for backward compat
+    stylistic_guidance: Optional[str] = Field(default=None, description="Artist-independent stylistic guidance")
+    desired_length: Optional[str] = Field(default="medium", description="'short', 'medium', 'long'")
+    theme: Optional[str] = "Love & Longing"
+    tone: Optional[str] = "Emotional"
     bpm: Optional[int] = Field(default=120, ge=40, le=240)
     musical_key: Optional[str] = "C Major"
     time_signature: Optional[str] = "4/4"
@@ -78,6 +82,22 @@ class LyricsTranslateResponse(BaseModel):
     source_language: str
     target_language: str
     translated_content: str
+    sections: List[LyricSection]
+
+class LyricsContinueRequest(BaseModel):
+    existing_lyrics: str = Field(..., min_length=10, description="Existing lyric content to continue from")
+    topic: Optional[str] = "Continue song"
+    genre: Optional[str] = "Pop"
+    mood: Optional[str] = "Emotional"
+    language: Optional[str] = "en"
+    target_section: Optional[str] = None  # e.g. "Verse 2", "Bridge", "Outro"
+    rhyme_style: Optional[str] = "AABB"
+    stylistic_guidance: Optional[str] = None
+
+class LyricsContinueResponse(BaseModel):
+    continued_lyrics: str
+    added_section_name: str
+    added_lines: List[LyricLine]
     sections: List[LyricSection]
 
 class LyricsRegenerateHookRequest(BaseModel):

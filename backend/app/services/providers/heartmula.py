@@ -22,13 +22,7 @@ class HeartMuLaMusicProvider(MusicGenerationProvider):
     name = "HeartMuLa (Alternative Provider)"
 
     def validate_configuration(self) -> Tuple[bool, Optional[str]]:
-        if settings.HEARTMULA_SERVICE_URL:
-            return (True, f"Connected to HeartMuLa worker at: {settings.HEARTMULA_SERVICE_URL}")
-        return (
-            False,
-            "Generation engine not configured: HeartMuLa inference worker is not connected. "
-            "Please configure HEARTMULA_SERVICE_URL in environment variables."
-        )
+        return False, "HeartMuLa integration is not implemented or verified. Use the ACE-Step GPU worker for singing."
 
     def get_capabilities(self) -> ProviderCapabilities:
         is_ready, msg = self.validate_configuration()
@@ -54,7 +48,7 @@ class HeartMuLaMusicProvider(MusicGenerationProvider):
             models_available=["heartmula-7b-preview"],
             is_configured=is_ready,
             configuration_message=msg,
-            commercial_grade=True,
+            commercial_grade=False,
             attribution_required=False,
             provider_type="self_hosted",
             status_label="Ready" if is_ready else "Worker Offline",
@@ -102,9 +96,9 @@ class HeartMuLaMusicProvider(MusicGenerationProvider):
 
     def get_license_metadata(self, tier: str = "creator") -> LicenseMetadata:
         return LicenseMetadata(
-            license_type="Open-Weight Research / Commercial Grant",
-            commercial_use_allowed=True,
-            monetization_allowed=True,
+            license_type="Unverified checkpoint/license",
+            commercial_use_allowed=False,
+            monetization_allowed=False,
             attribution_required=False,
             warranty_terms="Open-weight model output provided as-is without copyright guarantee or warranty.",
             c2pa_manifest_conforming=True,

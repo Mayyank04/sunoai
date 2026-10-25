@@ -15,6 +15,13 @@ from backend.app.schemas.common import PaginatedResponse
 
 router = APIRouter(prefix="/jobs", tags=["Background Jobs & Telemetry"])
 
+async def _owned_job(db, job_id, user):
+    job = await db.get(Job, job_id)
+    if not job or (job.user_id != user.id and user.role not in ("admin", "moderator")):
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
+
+
 @router.get("", response_model=PaginatedResponse[JobRead])
 async def list_jobs(
     status_filter: Optional[str] = Query(None, alias="status", pattern="^(queued|running|succeeded|failed|cancelled)$"),
@@ -51,7 +58,8 @@ async def list_jobs(
     )
 
 @router.get("/{job_id}/stream")
-async def stream_job_telemetry(job_id: str):
+async def stream_job_telemetry(job_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await _owned_job(db, job_id, current_user)
     """
     Server-Sent Events (SSE) real-time event stream.
     Emits generation progress percentage, phase changes, and completion payload.
@@ -69,8 +77,10 @@ async def stream_job_telemetry(job_id: str):
 @router.get("/{job_id}", response_model=JobRead)
 async def get_job_status(
     job_id: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await _owned_job(db, job_id, current_user)
     """Polling endpoint returning current job status and stage progress."""
     # Check Job table first
     res = await db.execute(select(Job).where(Job.id == job_id))
@@ -123,6 +133,11 @@ async def cancel_job(
     db: AsyncSession = Depends(get_db),
 ):
     """Cancel an in-flight or queued job."""
+    owned = await _owned_job(db, job_id, current_user)
+    if owned.job_type == "generation":
+        from backend.app.api.v1.generation import cancel_generation_job
+        await cancel_generation_job(job_id, current_user, db)
+        return await get_job_status(job_id, current_user, db)
     res = await db.execute(select(Job).where(Job.id == job_id))
     job = res.scalar_one_or_none()
     if job:
@@ -169,6 +184,11 @@ async def retry_job(
     db: AsyncSession = Depends(get_db),
 ):
     """Retry a failed job using exponential retry policy."""
+    owned = await _owned_job(db, job_id, current_user)
+    if owned.job_type == "generation":
+        from backend.app.api.v1.generation import retry_generation_job
+        await retry_generation_job(job_id, current_user, db)
+        return await get_job_status(job_id, current_user, db)
     res = await db.execute(select(Job).where(Job.id == job_id))
     job = res.scalar_one_or_none()
     if not job:

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, resolveMediaUrl } from "@/lib/api";
 
 export interface TrackItem {
   id: string;
@@ -30,6 +30,7 @@ export interface TrackItem {
 interface AudioPlayerContextType {
   currentTrack: TrackItem | null;
   isPlaying: boolean;
+  playbackError: string | null;
   currentTime: number;
   duration: number;
   volume: number;
@@ -47,6 +48,7 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
   const [currentTrack, setCurrentTrack] = useState<TrackItem | null>(null);
   const currentTrackRef = useRef<TrackItem | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolumeState] = useState(0.85);
@@ -98,6 +100,13 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
       setDuration(audio.duration || 0);
     };
 
+    const handleError = () => {
+      setIsPlaying(false);
+      setPlaybackError("The audio could not be loaded. Please retry playback or check the saved track.");
+    };
+    const handlePlaying = () => { setIsPlaying(true); setPlaybackError(null); };
+    const handlePause = () => setIsPlaying(false);
+
     const handleEnded = () => {
       setIsPlaying(false);
       setCurrentTime(0);
@@ -106,11 +115,17 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     audio.addEventListener("timeupdate", handleTimeUpdate);
     audio.addEventListener("loadedmetadata", handleLoadedMetadata);
     audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("error", handleError);
+    audio.addEventListener("playing", handlePlaying);
+    audio.addEventListener("pause", handlePause);
 
     return () => {
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
       audio.removeEventListener("ended", handleEnded);
+      audio.removeEventListener("error", handleError);
+      audio.removeEventListener("playing", handlePlaying);
+      audio.removeEventListener("pause", handlePause);
       audio.pause();
     };
   }, []);
@@ -152,18 +167,24 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     initAudioGraph();
     if (!audioRef.current) return;
 
-    if (currentTrack?.id === track.id) {
+    if (currentTrack?.id === track.id && currentTrack?.audio_url === track.audio_url) {
       togglePlay();
       return;
     }
 
     setCurrentTrack(track);
-    audioRef.current.src = track.audio_url;
+    setPlaybackError(null);
+    setCurrentTime(0);
+    setDuration(0);
+    audioRef.current.src = resolveMediaUrl(track.audio_url);
     audioRef.current.load();
     audioRef.current
       .play()
       .then(() => setIsPlaying(true))
-      .catch(() => setIsPlaying(false));
+      .catch((error) => {
+        setIsPlaying(false);
+        setPlaybackError(error?.name === "NotAllowedError" ? "Press Play to start audio in this browser." : "Playback failed. Please retry or check the saved audio.");
+      });
   };
 
   const togglePlay = () => {
@@ -177,7 +198,10 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
       audioRef.current
         .play()
         .then(() => setIsPlaying(true))
-        .catch(() => setIsPlaying(false));
+        .catch((error) => {
+          setIsPlaying(false);
+          setPlaybackError(error?.name === "NotAllowedError" ? "Press Play to start audio in this browser." : "Playback failed. Please retry or check the saved audio.");
+        });
     }
   };
 
@@ -210,6 +234,7 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
       value={{
         currentTrack,
         isPlaying,
+        playbackError,
         currentTime,
         duration,
         volume,

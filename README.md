@@ -16,9 +16,9 @@
 ### Core Tenets:
 1. **Zero-Mock Truthfulness**: The platform never simulates audio playback, fake completion states, synthetic billing success, or arbitrary copyright exclusivity. If a chosen model inference worker is offline or unconfigured, the UI clearly displays **"Generation engine not configured"**.
 2. **Open-Weight Architecture**:
-   - **Default Provider**: **ACE-Step 1.5** open-weight diffusion transformer.
-   - **Alternative Provider**: **HeartMuLa** multimodal musical language model.
-   - **Offline Procedural DSP**: Mathematical synthesizer for local, zero-dependency testing.
+   - **Default Provider**: **ACE-Step 1.5** with pinned MIT-licensed checkpoints on a separate CUDA worker.
+   - **HeartMuLa**: adapter placeholder, unavailable until implemented and verified.
+   - **Offline Procedural DSP**: Instrumental-only mathematical synthesizer, never a vocal fallback.
    - **External Proxies**: Suno API and Stability Audio adapters.
    - **Hardware Boundary**: Never runs GPU inference inside Next.js. GPU inference runs on dedicated worker clusters (RunPod, Modal, EC2 G5).
 3. **Dual-Tier Audio Engine**:
@@ -66,6 +66,12 @@
 ```
 
 ---
+
+## Vocal generation setup and verification
+
+The former `workers/ace_step/worker.py` produced procedural DSP, despite claiming ACE-Step. It has been replaced with real lyrics-conditioned neural inference, authenticated durable jobs, and readiness checks that require the actual CUDA model and pinned checkpoint. No speech or procedural substitute is used.
+
+Follow [GPU worker setup](workers/ace_step/README.md) and the [audit and validation report](docs/vocal-generation-audit.md). This Mac currently has no configured CUDA runtime or model checkpoint; vocal generation correctly remains unavailable and does not charge credits. Audible singing has not been verified. The frontend and authentication remain in place. Development chunks use `.next-dev`, production builds use `.next`.
 
 ## 3. Quickstart Guide (Local Development on macOS)
 
@@ -169,7 +175,7 @@ npm run test:e2e
 
 ## 6. Model Licensing & Commercial Disclaimers
 
-- **ACE-Step 1.5**: Apache 2.0 open-weight diffusion transformer.
+- **ACE-Step 1.5**: official MIT checkpoint; bundled Qwen embedding component Apache-2.0. See [model audit](docs/vocal-generation-audit.md).
 - **HeartMuLa**: Open-weight multimodal music model.
 - **Demucs v4**: MIT License for 4-stem separation.
 - **Statutory Non-Infringement Disclaimer**:

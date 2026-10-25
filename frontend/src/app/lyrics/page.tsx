@@ -154,6 +154,10 @@ export default function LyricsWorkspacePage() {
     "Outro",
   ]);
 
+  const [desiredLength, setDesiredLength] = useState<"short" | "medium" | "long">("medium");
+  const [stylisticGuidance, setStylisticGuidance] = useState<string>("Modern poetic imagery, tight rhythmic cadence, avoid clichés");
+  const [selectedMusicProvider, setSelectedMusicProvider] = useState<string>("ace_step_1_5");
+
   // Workspace Editor State
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("Raat Ka Safar (Opus)");
@@ -172,6 +176,7 @@ export default function LyricsWorkspacePage() {
 
   // Processing & UI Feedback
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isContinuing, setIsContinuing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showArrangementAccordion, setShowArrangementAccordion] = useState(false);
@@ -250,8 +255,8 @@ export default function LyricsWorkspacePage() {
   };
 
   // Generate Lyrics
-  const handleGenerateLyrics = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGenerateLyrics = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setIsGenerating(true);
     setStatusNotice(null);
 
@@ -266,9 +271,13 @@ export default function LyricsWorkspacePage() {
           topic,
           theme,
           tone,
+          rhyme_style: rhymeScheme,
           rhyme_scheme: rhymeScheme,
           language,
+          song_structure: structure,
           structure,
+          stylistic_guidance: stylisticGuidance,
+          desired_length: desiredLength,
           genre,
           mood: tone,
           bpm,
@@ -293,6 +302,48 @@ export default function LyricsWorkspacePage() {
     }
   };
 
+  // Continue Existing Lyrics
+  const handleContinueLyrics = async () => {
+    if (!rawLyrics.trim()) {
+      setStatusNotice({ type: "error", text: "Please enter or generate lyrics first before continuing." });
+      return;
+    }
+    setIsContinuing(true);
+    setStatusNotice(null);
+
+    try {
+      const res = await apiRequest<{
+        continued_lyrics: string;
+        added_section_name: string;
+        added_lines: LyricLine[];
+        sections: LyricSection[];
+      }>("/lyrics/continue", {
+        method: "POST",
+        body: JSON.stringify({
+          existing_lyrics: rawLyrics,
+          topic,
+          genre,
+          mood: tone,
+          language,
+          rhyme_style: rhymeScheme,
+          stylistic_guidance: stylisticGuidance,
+        }),
+      });
+
+      setRawLyrics(res.continued_lyrics);
+      setSections(res.sections);
+      analyzeSyllables(res.continued_lyrics, language);
+      setStatusNotice({
+        type: "success",
+        text: `Appended new section [${res.added_section_name}] with ${res.added_lines.length} lines.`,
+      });
+    } catch (err: any) {
+      setStatusNotice({ type: "error", text: err.message || "Failed to continue lyrics." });
+    } finally {
+      setIsContinuing(false);
+    }
+  };
+
   // Rewrite Line Action
   const handleRewriteLine = async (lineText: string, instruction: string) => {
     try {
@@ -309,8 +360,62 @@ export default function LyricsWorkspacePage() {
     }
   };
 
+  // Rewrite Verse Action
+  const handleRewriteVerse = async (sectionName: string, lines: LyricLine[]) => {
+    try {
+      const res = await apiRequest<{ raw_section: string }>("/lyrics/rewrite-verse", {
+        method: "POST",
+        body: JSON.stringify({
+          section_name: sectionName,
+          section_lines: lines.map((l) => l.text),
+          instruction: "more expressive, poetic narrative with rich imagery",
+          language,
+          genre,
+          topic,
+        }),
+      });
+      const regex = new RegExp(`\\[${sectionName}\\][\\s\\S]*?(?=\\n\\[|$)`, "i");
+      const updated = rawLyrics.replace(regex, res.raw_section);
+      setRawLyrics(updated);
+      analyzeSyllables(updated, language);
+      setStatusNotice({ type: "success", text: `Verse [${sectionName}] rewritten.` });
+    } catch (err: any) {
+      setStatusNotice({ type: "error", text: err.message || "Verse rewrite failed." });
+    }
+  };
+
+  // Rewrite Chorus Action
+  const handleRewriteChorus = async (sectionName: string, lines: LyricLine[]) => {
+    try {
+      const res = await apiRequest<{ raw_section: string }>("/lyrics/rewrite-chorus", {
+        method: "POST",
+        body: JSON.stringify({
+          section_name: sectionName,
+          section_lines: lines.map((l) => l.text),
+          instruction: "more anthemic, memorable hook with infectious rhythm",
+          language,
+          genre,
+          topic,
+        }),
+      });
+      const regex = new RegExp(`\\[${sectionName}\\][\\s\\S]*?(?=\\n\\[|$)`, "i");
+      const updated = rawLyrics.replace(regex, res.raw_section);
+      setRawLyrics(updated);
+      analyzeSyllables(updated, language);
+      setStatusNotice({ type: "success", text: `Chorus [${sectionName}] rewritten.` });
+    } catch (err: any) {
+      setStatusNotice({ type: "error", text: err.message || "Chorus rewrite failed." });
+    }
+  };
+
   // Rewrite Section Action
   const handleRewriteSection = async (sectionName: string, lines: LyricLine[]) => {
+    if (sectionName.toLowerCase().includes("chorus")) {
+      return handleRewriteChorus(sectionName, lines);
+    }
+    if (sectionName.toLowerCase().includes("verse")) {
+      return handleRewriteVerse(sectionName, lines);
+    }
     try {
       const res = await apiRequest<{ raw_section: string }>("/lyrics/rewrite-section", {
         method: "POST",
@@ -322,7 +427,6 @@ export default function LyricsWorkspacePage() {
           genre,
         }),
       });
-      // Replace section in raw text
       const regex = new RegExp(`\\[${sectionName}\\][\\s\\S]*?(?=\\n\\[|$)`, "i");
       const updated = rawLyrics.replace(regex, res.raw_section);
       setRawLyrics(updated);
@@ -490,14 +594,15 @@ export default function LyricsWorkspacePage() {
   // Send to Composition Studio (/create) with Strict Governance Check
   const handleSendToMusicStudio = async () => {
     try {
-      const res = await apiRequest<{ status: string; prompt: string; lyrics: string }>(
+      const targetProv = selectedMusicProvider || "ace_step_1_5";
+      const res = await apiRequest<{ status: string; prompt: string; lyrics: string; provider: string }>(
         "/lyrics/send-to-music",
         {
           method: "POST",
           body: JSON.stringify({
             title: draftTitle,
             lyrics: rawLyrics,
-            provider: "suno", // Suno confirms lyrics support
+            provider: targetProv,
             genre,
             bpm,
             musical_key: musicalKey,
@@ -507,9 +612,15 @@ export default function LyricsWorkspacePage() {
         }
       );
 
+      // Persist in sessionStorage for lossless full-length lyrics transfer
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("fombo_pending_lyrics", rawLyrics);
+        sessionStorage.setItem("fombo_pending_provider", res.provider || targetProv);
+      }
+
       // Route to create with pre-filled lyrics and arrangement
       router.push(
-        `/create?prompt=${encodeURIComponent(res.prompt)}&genre=${encodeURIComponent(genre)}&key=${encodeURIComponent(musicalKey)}&bpm=${bpm}`
+        `/create?prompt=${encodeURIComponent(res.prompt)}&genre=${encodeURIComponent(genre)}&key=${encodeURIComponent(musicalKey)}&bpm=${bpm}&provider=${encodeURIComponent(res.provider || targetProv)}`
       );
     } catch (err: any) {
       setStatusNotice({
@@ -535,6 +646,28 @@ export default function LyricsWorkspacePage() {
 
         {/* Global Toolbar Actions */}
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => handleGenerateLyrics()}
+            disabled={isGenerating}
+            className="px-3 py-2 rounded-xl bg-studio-850 hover:bg-studio-800 text-studio-200 border border-studio-750 text-xs font-mono font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+            title="Regenerate fresh lyrics"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 text-neon-pink ${isGenerating ? "animate-spin" : ""}`} />
+            <span>Regenerate</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleContinueLyrics}
+            disabled={isContinuing || isGenerating}
+            className="px-3.5 py-2 rounded-xl bg-neon-cyan/15 hover:bg-neon-cyan/25 text-neon-cyan border border-neon-cyan/35 text-xs font-mono font-bold flex items-center gap-1.5 transition disabled:opacity-50"
+            title="Continue and add next section"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${isContinuing ? "animate-spin" : ""}`} />
+            <span>{isContinuing ? "Continuing..." : "Continue Lyrics"}</span>
+          </button>
+
           <button
             type="button"
             onClick={handleSaveDraft}
@@ -827,15 +960,64 @@ export default function LyricsWorkspacePage() {
               )}
             </div>
 
+            {/* Desired Song Length */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-mono text-studio-400">DESIRED LENGTH</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { id: "short", label: "Short" },
+                  { id: "medium", label: "Medium" },
+                  { id: "long", label: "Long" },
+                ].map((len) => (
+                  <button
+                    key={len.id}
+                    type="button"
+                    onClick={() => setDesiredLength(len.id as any)}
+                    className={`py-1.5 rounded-lg border text-[11px] font-mono transition ${
+                      desiredLength === len.id
+                        ? "bg-neon-purple/20 border-neon-purple text-neon-purple font-bold"
+                        : "bg-studio-950 border-studio-800 text-studio-400 hover:border-studio-700"
+                    }`}
+                  >
+                    {len.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Stylistic Guidance */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-mono text-studio-400">STYLISTIC GUIDANCE</label>
+              <input
+                type="text"
+                value={stylisticGuidance}
+                onChange={(e) => setStylisticGuidance(e.target.value)}
+                className="w-full bg-studio-950 border border-studio-800 rounded-xl px-2.5 py-1.5 text-xs text-studio-200 focus:outline-none focus:border-neon-purple/50"
+                placeholder="e.g. Atmospheric, metaphorical, avoid clichés"
+              />
+            </div>
+
             {/* Submit Action */}
-            <button
-              type="submit"
-              disabled={isGenerating}
-              className="w-full py-3.5 rounded-xl bg-neon-purple text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:opacity-95 transition shadow-lg shadow-neon-purple/20 disabled:opacity-50"
-            >
-              <Sparkles className="w-4 h-4 fill-current" />
-              <span>{isGenerating ? "Composing Lyrics..." : "Generate Lyrics with AI"}</span>
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              <button
+                type="submit"
+                disabled={isGenerating}
+                className="py-3 rounded-xl bg-neon-purple text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:opacity-95 transition shadow-lg shadow-neon-purple/20 disabled:opacity-50"
+              >
+                <Sparkles className="w-4 h-4 fill-current" />
+                <span>{isGenerating ? "Composing..." : "Generate AI"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleGenerateLyrics()}
+                disabled={isGenerating}
+                className="py-3 rounded-xl bg-studio-800 hover:bg-studio-750 text-studio-200 border border-studio-700 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 text-neon-pink ${isGenerating ? "animate-spin" : ""}`} />
+                <span>Regenerate</span>
+              </button>
+            </div>
           </form>
 
           {/* Quick Translation & Hook Assistant Card */}
@@ -937,13 +1119,35 @@ export default function LyricsWorkspacePage() {
                   >
                     <div className="flex items-center justify-between text-xs font-mono font-bold text-neon-purple">
                       <span>[{sec.section_name}]</span>
-                      <button
-                        type="button"
-                        onClick={() => handleRewriteSection(sec.section_name, sec.lines)}
-                        className="text-[10px] text-studio-400 hover:text-neon-cyan flex items-center gap-1 transition"
-                      >
-                        <RotateCcw className="w-3 h-3" /> Rewrite Section
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        {sec.section_name.toLowerCase().includes("verse") && (
+                          <button
+                            type="button"
+                            onClick={() => handleRewriteVerse(sec.section_name, sec.lines)}
+                            className="text-[10px] text-neon-purple hover:text-white px-2 py-0.5 rounded bg-studio-900 border border-studio-800 flex items-center gap-1 transition"
+                            title="Rewrite verse with poetic storytelling"
+                          >
+                            <Wand2 className="w-3 h-3 text-neon-purple" /> Rewrite Verse
+                          </button>
+                        )}
+                        {sec.section_name.toLowerCase().includes("chorus") && (
+                          <button
+                            type="button"
+                            onClick={() => handleRewriteChorus(sec.section_name, sec.lines)}
+                            className="text-[10px] text-neon-pink hover:text-white px-2 py-0.5 rounded bg-studio-900 border border-studio-800 flex items-center gap-1 transition"
+                            title="Rewrite chorus with catchy anthemic hook"
+                          >
+                            <Sparkles className="w-3 h-3 text-neon-pink" /> Rewrite Chorus
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRewriteSection(sec.section_name, sec.lines)}
+                          className="text-[10px] text-studio-400 hover:text-neon-cyan px-2 py-0.5 rounded bg-studio-900 border border-studio-800 flex items-center gap-1 transition"
+                        >
+                          <RotateCcw className="w-3 h-3" /> Re-roll
+                        </button>
+                      </div>
                     </div>
 
                     <div className="space-y-1.5">
@@ -1060,25 +1264,49 @@ export default function LyricsWorkspacePage() {
               Model Governance
             </h4>
 
+            {/* Target Vocal Provider Selector */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-mono text-studio-400">TARGET AUDIO SYNTHESIS ENGINE</label>
+              <select
+                value={selectedMusicProvider}
+                onChange={(e) => setSelectedMusicProvider(e.target.value)}
+                className="w-full bg-studio-950 border border-studio-800 rounded-xl px-2.5 py-1.5 text-xs text-studio-200 focus:outline-none font-mono"
+              >
+                <option value="ace_step_1_5">ACE-Step 1.5 (Open-Weight Default)</option>
+              </select>
+            </div>
+
             <div className="p-3 rounded-xl bg-studio-950 border border-studio-800 text-xs space-y-2">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-studio-200">Suno Music API</span>
+                <span className="font-semibold text-studio-200">ACE-Step 1.5</span>
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">
-                  Lyrics Supported
+                  Requires GPU Worker
                 </span>
               </div>
               <p className="text-[11px] text-studio-400">
-                Full neural vocal synthesis confirmed for Hindi, English, Hinglish, Punjabi & Spanish singing voices.
+                Lyrics-conditioned music generation. The creation studio checks GPU and checkpoint readiness before reserving credits.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-studio-950 border border-studio-800 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-studio-200">Suno Music API</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-neon-cyan/10 text-neon-cyan font-mono">
+                  Setup Required
+                </span>
+              </div>
+              <p className="text-[11px] text-studio-400">
+                External proxy configuration does not establish vocal capability or commercial permissions. This integration is unavailable for singing until verified.
               </p>
             </div>
 
             <div className="p-3 rounded-xl bg-studio-950/60 border border-studio-850 text-xs space-y-1 text-studio-500">
               <div className="flex items-center justify-between">
-                <span>Procedural / AudioCraft</span>
+                <span>Procedural DSP</span>
                 <span className="text-[10px] font-mono text-studio-600">Instrumental Only</span>
               </div>
               <p className="text-[10px]">
-                These providers enforce strict capability checks; lyrics will not be silently dropped.
+                Built-in mathematical sound engine. To generate singing vocals, connect a ready ACE-Step 1.5 worker.
               </p>
             </div>
           </div>

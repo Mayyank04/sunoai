@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.core.config import settings
 from backend.app.core.database import init_db
 from backend.app.api.v1.router import api_v1_router
+from backend.app.api.v1.lyrics import router as lyrics_router
 
 logger = logging.getLogger("fombo.server")
 logging.basicConfig(
@@ -20,8 +21,12 @@ logging.basicConfig(
 async def lifespan(app: FastAPI):
     # Initialize Database Tables
     await init_db()
-    yield
-    # Shutdown cleanup if needed
+    from backend.app.services.job_runner import job_runner
+    await job_runner.start()
+    try:
+        yield
+    finally:
+        await job_runner.stop()
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -95,6 +100,9 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 # Mount API v1
 app.include_router(api_v1_router)
+
+# Mount /api/lyrics directly for unversioned lyrics endpoints
+app.include_router(lyrics_router, prefix="/api")
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
