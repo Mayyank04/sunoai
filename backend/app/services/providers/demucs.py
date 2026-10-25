@@ -89,7 +89,7 @@ class DemucsStemProvider:
         def pack_wav(sample_list: list) -> bytes:
             bio = io.BytesIO()
             with wave.open(bio, "wb") as out_wf:
-                out_wf.setnchannels(1)
+                out_wf.setnchannels(channels)
                 out_wf.setsampwidth(2)
                 out_wf.setframerate(rate)
                 pcm = bytearray()

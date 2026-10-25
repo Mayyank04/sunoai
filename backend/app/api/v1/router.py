@@ -8,6 +8,7 @@ from backend.app.api.v1.lyrics import router as lyrics_router
 from backend.app.api.v1.stems import router as stems_router
 from backend.app.api.v1.provenance import router as provenance_router
 from backend.app.api.v1.daw import router as daw_router
+from backend.app.api.v1.editor import router as editor_router
 from backend.app.api.v1.voice_consent import router as voice_router
 from backend.app.api.v1.subscriptions import router as sub_router
 from backend.app.api.v1.uploads import router as uploads_router
@@ -37,6 +38,7 @@ api_v1_router.include_router(lyrics_router)
 api_v1_router.include_router(stems_router)
 api_v1_router.include_router(provenance_router)
 api_v1_router.include_router(daw_router)
+api_v1_router.include_router(editor_router)
 api_v1_router.include_router(voice_router)
 
 # Storage & Uploads

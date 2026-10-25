@@ -12,8 +12,9 @@ export async function apiRequest<T = any>(
 ): Promise<T> {
   const token = typeof window !== "undefined" ? localStorage.getItem("fombo_token") : null;
 
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...(options.headers as Record<string, string> || {}),
   };
 

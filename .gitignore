@@ -27,6 +27,9 @@ test_fombo_temp.db
 storage_data/uploads/*
 storage_data/stems/*
 storage_data/tracks/*
+storage_data/edits/*
+storage_data/covers/*
+storage_data/recordings/*
 !storage_data/tracks/demo_*.wav
 
 # Environment & Local Secrets
