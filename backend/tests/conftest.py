@@ -30,6 +30,10 @@ async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         finally:
             await session.close()
 
+import backend.app.core.database as core_db
+core_db.async_session_maker = test_session_maker
+core_db.async_engine = test_engine
+
 app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="session")

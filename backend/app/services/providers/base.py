@@ -1,55 +1,150 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional, Tuple
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class ProviderCapabilities(BaseModel):
     provider_id: str
     display_name: str
+    description: str = ""
     supports_text_to_audio: bool = True
     supports_audio_to_audio: bool = False
     supports_stems: bool = False
     supports_lyrics: bool = False
+    supports_vocals: bool = False
+    supports_instrumental_toggle: bool = True
+    supports_bpm_control: bool = True
+    supports_key_control: bool = True
+    supports_instrument_selection: bool = True
+    supports_dual_variants: bool = False
+    min_duration_seconds: int = 10
     max_duration_seconds: int = 180
-    models_available: List[str]
+    supported_genres: List[str] = [
+        "Synthwave", "Cyberpunk", "Electronic", "Lo-Fi", "Ambient", "Orchestral", "Hip Hop", "Pop", "Rock"
+    ]
+    supported_audio_formats: List[str] = ["wav", "mp3"]
+    models_available: List[str] = []
     is_configured: bool = False
     configuration_message: Optional[str] = None
-    commercial_grade: bool = False
+    commercial_grade: bool = True
+    attribution_required: bool = False
 
 class GenerationRequestParams(BaseModel):
     provider_id: str = "fombo_procedural"
+    model_name: str = "procedural-dsp-v1"
     prompt: str
-    negative_prompt: Optional[str] = None
-    genre: Optional[str] = "Electronic"
-    style_tags: List[str] = []
-    bpm: int = 120
+    lyrics: Optional[str] = None
+    make_instrumental: bool = True
+    genre: Optional[str] = "Synthwave"
+    mood: Optional[str] = "Nostalgic"
+    instruments: List[str] = Field(default_factory=list)
+    style_tags: List[str] = Field(default_factory=list)
+    bpm: int = Field(default=120, ge=40, le=240)
     musical_key: str = "C Major"
-    duration_seconds: int = 30
-    seed: int = 42
-    temperature: float = 1.0
-    model_name: str
+    duration_seconds: int = Field(default=30, ge=10, le=300)
+    seed: Optional[int] = None
+    temperature: float = Field(default=1.0, ge=0.1, le=2.0)
+    generate_two_variants: bool = False
     reference_audio_url: Optional[str] = None
 
-class BaseMusicProvider(ABC):
-    """Abstract base class for all AI audio generation providers."""
+class GenerationResult(BaseModel):
+    audio_bytes: bytes
+    second_variant_bytes: Optional[bytes] = None
+    duration_seconds: float
+    sample_rate: int = 44100
+    bit_depth: int = 16
+    channels: int = 2
+    format: str = "wav"
+    provider_job_id: Optional[str] = None
+    seed_used: int = 42
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class GenerationStatus(BaseModel):
+    job_id: str
+    status: str = Field(..., description="queued, running, succeeded, failed, cancelled")
+    progress_percentage: int = 0
+    current_stage: str = "Initialized"
+    audio_url: Optional[str] = None
+    second_audio_url: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+class CostEstimate(BaseModel):
+    credits_required: int
+    estimated_duration_seconds: float
+    cost_cents: int = 0
+    tier_discount_applied: Optional[str] = None
+
+class LicenseMetadata(BaseModel):
+    license_type: str
+    commercial_use_allowed: bool
+    monetization_allowed: bool
+    attribution_required: bool
+    warranty_terms: str
+    c2pa_manifest_conforming: bool = True
+
+class MusicGenerationProvider(ABC):
+    """
+    Pluggable contract for all Fombo Music AI generation backends.
+    All models must strictly declare capabilities and adhere to this interface.
+    """
 
     provider_id: str
     name: str
 
     @abstractmethod
     def validate_configuration(self) -> Tuple[bool, Optional[str]]:
-        """Checks if required API keys, endpoints, or local model binaries are accessible."""
+        """Checks if required API keys, remote endpoints, or local model weights are present."""
         pass
 
     @abstractmethod
     def get_capabilities(self) -> ProviderCapabilities:
-        """Returns capabilities and active configuration state."""
+        """Returns verified feature matrix and configuration state."""
+        pass
+
+    # CamelCase alias for interface compliance
+    def getCapabilities(self) -> ProviderCapabilities:
+        return self.get_capabilities()
+
+    @abstractmethod
+    async def generate(self, params: GenerationRequestParams) -> GenerationResult:
+        """Executes real asynchronous audio generation returning authentic audio buffers."""
         pass
 
     @abstractmethod
-    async def generate_audio(self, params: GenerationRequestParams) -> bytes:
-        """
-        Executes real audio generation and returns raw WAV bytes.
-        Never returns fake or mock audio.
-        Must raise ValueError with clear configuration details if unconfigured.
-        """
+    async def get_status(self, job_id: str) -> GenerationStatus:
+        """Polls current provider-side task status."""
         pass
+
+    # CamelCase alias
+    async def getStatus(self, job_id: str) -> GenerationStatus:
+        return await self.get_status(job_id)
+
+    @abstractmethod
+    async def cancel(self, job_id: str) -> bool:
+        """Requests cancellation of an ongoing generation task."""
+        pass
+
+    @abstractmethod
+    def estimate_cost(self, params: GenerationRequestParams) -> CostEstimate:
+        """Calculates credit quota and time estimation for a proposed job."""
+        pass
+
+    # CamelCase alias
+    def estimateCost(self, params: GenerationRequestParams) -> CostEstimate:
+        return self.estimate_cost(params)
+
+    @abstractmethod
+    def get_license_metadata(self, tier: str = "creator") -> LicenseMetadata:
+        """Returns commercial license terms and C2PA provenance rules for generated audio."""
+        pass
+
+    # CamelCase alias
+    def getLicenseMetadata(self, tier: str = "creator") -> LicenseMetadata:
+        return self.get_license_metadata(tier)
+
+    # Backward compatibility helper for legacy calls
+    async def generate_audio(self, params: GenerationRequestParams) -> bytes:
+        res = await self.generate(params)
+        return res.audio_bytes
+
+BaseMusicProvider = MusicGenerationProvider

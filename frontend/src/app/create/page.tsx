@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { apiRequest } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useAudioPlayer, TrackItem } from "@/context/AudioPlayerContext";
@@ -16,156 +16,379 @@ import {
   ArrowRight,
   ShieldCheck,
   Music,
+  RotateCcw,
+  XCircle,
+  ToggleLeft,
+  ToggleRight,
+  Radio,
+  FileText,
+  SlidersHorizontal,
+  Info,
 } from "lucide-react";
 import { ProvenanceModal } from "@/components/provenance/ProvenanceModal";
 
 interface ProviderCap {
   provider_id: string;
   display_name: string;
+  description: string;
+  supports_text_to_audio: boolean;
+  supports_audio_to_audio: boolean;
+  supports_stems: boolean;
+  supports_lyrics: boolean;
+  supports_vocals: boolean;
+  supports_instrumental_toggle: boolean;
+  supports_bpm_control: boolean;
+  supports_key_control: boolean;
+  supports_instrument_selection: boolean;
+  supports_dual_variants: boolean;
+  min_duration_seconds: number;
+  max_duration_seconds: number;
+  models_available: string[];
   is_configured: boolean;
   configuration_message?: string;
-  models_available: string[];
+  commercial_grade: boolean;
+  attribution_required: boolean;
 }
+
+const AVAILABLE_INSTRUMENTS = [
+  "Analog Synthesizer",
+  "808 Bass",
+  "Grand Piano",
+  "Electric Guitar",
+  "Acoustic Drums",
+  "String Quartet",
+  "Brass Ensemble",
+  "Ambient Pads",
+  "Sub Bass",
+  "Vintage Rhodes",
+];
+
+const GENRES = [
+  "Synthwave",
+  "Cyberpunk",
+  "Lo-Fi",
+  "Ambient",
+  "Cinematic",
+  "Deep House",
+  "Hip Hop",
+  "Neo-Classical",
+  "Rock",
+];
+
+const MOODS = [
+  "Nostalgic",
+  "Energetic",
+  "Melancholic",
+  "Dreamy",
+  "Dark & Menacing",
+  "Euphoric",
+  "Chill & Relaxed",
+  "Epic & Triumphant",
+];
 
 export default function CreateStudioPage() {
   const { user, refreshUser } = useAuth();
   const { playTrack, currentTrack, isPlaying, togglePlay } = useAudioPlayer();
 
-  // Prompt Form State
+  // Mode: "simple" | "custom"
+  const [mode, setMode] = useState<"simple" | "custom">("custom");
+
+  // Core Prompt State
   const [prompt, setPrompt] = useState(
     "80s retro synthwave anthem with lush analog pads, pumping gated snare and neon arpeggio bassline"
   );
   const [negativePrompt, setNegativePrompt] = useState("distortion, clipping, harsh lo-fi noise");
+  const [makeInstrumental, setMakeInstrumental] = useState(true);
+  const [lyrics, setLyrics] = useState("");
   const [genre, setGenre] = useState("Synthwave");
+  const [mood, setMood] = useState("Nostalgic");
+  const [selectedInstruments, setSelectedInstruments] = useState<string[]>([
+    "Analog Synthesizer",
+    "808 Bass",
+  ]);
   const [bpm, setBpm] = useState(124);
   const [musicalKey, setMusicalKey] = useState("F Minor");
   const [duration, setDuration] = useState(30);
+  const [generateTwoVariants, setGenerateTwoVariants] = useState(true);
 
   // Provider State
   const [providers, setProviders] = useState<ProviderCap[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState<string>("fombo_procedural");
+  const [selectedProviderId, setSelectedProviderId] = useState<string>("fombo_procedural");
   const [selectedModel, setSelectedModel] = useState<string>("procedural-dsp-v1");
+  const [estimatedCredits, setEstimatedCredits] = useState<number>(5);
 
-  // Job Progress State
+  // Job Progress & Telemetry State
   const [isGenerating, setIsGenerating] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [jobProgress, setJobProgress] = useState<{
     phase: string;
     progress: number;
-    job_id?: string;
-    track_id?: string;
-    audio_url?: string;
+    current_stage?: string;
   } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [createdTrack, setCreatedTrack] = useState<TrackItem | null>(null);
+  const [lastFailedJobId, setLastFailedJobId] = useState<string | null>(null);
+
+  // Completed Tracks (Variant A and Variant B)
+  const [variantA, setVariantA] = useState<TrackItem | null>(null);
+  const [variantB, setVariantB] = useState<TrackItem | null>(null);
   const [inspectProvenanceId, setInspectProvenanceId] = useState<string | null>(null);
 
-  // Load Providers on mount
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Fetch Providers on Mount
   useEffect(() => {
     apiRequest<ProviderCap[]>("/generation/providers")
       .then((data) => {
         setProviders(data);
         const procedural = data.find((p) => p.provider_id === "fombo_procedural");
         if (procedural) {
-          setSelectedProvider(procedural.provider_id);
+          setSelectedProviderId(procedural.provider_id);
           setSelectedModel(procedural.models_available[0] || "procedural-dsp-v1");
+          setGenerateTwoVariants(procedural.supports_dual_variants);
         }
       })
       .catch(() => {});
   }, []);
 
-  const handleProviderChange = (provId: string) => {
-    setSelectedProvider(provId);
+  // Update Selected Provider
+  const handleProviderSelect = (provId: string) => {
+    setSelectedProviderId(provId);
     const p = providers.find((x) => x.provider_id === provId);
-    if (p && p.models_available.length > 0) {
-      setSelectedModel(p.models_available[0]);
+    if (p) {
+      if (p.models_available.length > 0) {
+        setSelectedModel(p.models_available[0]);
+      }
+      if (!p.supports_dual_variants) {
+        setGenerateTwoVariants(false);
+      }
+      if (duration > p.max_duration_seconds) {
+        setDuration(p.max_duration_seconds);
+      } else if (duration < p.min_duration_seconds) {
+        setDuration(p.min_duration_seconds);
+      }
     }
   };
 
-  const handleStylePreset = (tag: string, targetGenre: string, targetKey: string, targetBpm: number) => {
-    setPrompt((prev) => `${prev}, ${tag}`);
-    setGenre(targetGenre);
-    setMusicalKey(targetKey);
-    setBpm(targetBpm);
+  const activeProvider = providers.find((p) => p.provider_id === selectedProviderId);
+
+  // Estimate Credits when options change
+  useEffect(() => {
+    let cost = 5;
+    if (generateTwoVariants && activeProvider?.supports_dual_variants) {
+      cost += 3;
+    }
+    if (duration > 60) {
+      cost += 2;
+    }
+    setEstimatedCredits(cost);
+  }, [selectedProviderId, generateTwoVariants, duration, activeProvider]);
+
+  // Instrument toggle
+  const toggleInstrument = (inst: string) => {
+    setSelectedInstruments((prev) =>
+      prev.includes(inst) ? prev.filter((i) => i !== inst) : [...prev, inst]
+    );
   };
 
-  const handleGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Preset style helper
+  const applyPreset = (tag: string, g: string, k: string, b: number, m: string) => {
+    setPrompt((prev) => `${prev}, ${tag}`);
+    setGenre(g);
+    setMusicalKey(k);
+    setBpm(b);
+    setMood(m);
+  };
+
+  // Cancel Job Action
+  const handleCancelJob = async () => {
+    if (!activeJobId) return;
+    try {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+      await apiRequest(`/generation/${activeJobId}/cancel`, { method: "POST" });
+      setIsGenerating(false);
+      setJobProgress(null);
+      setErrorMessage("Generation task was cancelled. Reserved credits have been refunded.");
+      refreshUser();
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to cancel generation job.");
+    }
+  };
+
+  // Retry Failed Job Action
+  const handleRetryJob = async () => {
+    if (!lastFailedJobId) return;
     setErrorMessage(null);
     setIsGenerating(true);
-    setJobProgress({ phase: "Submitting generation task...", progress: 5 });
+    setJobProgress({ phase: "Enqueuing retry task...", progress: 5, current_stage: "Queued" });
 
     try {
       const res = await apiRequest<{
         job_id: string;
         status: string;
         remaining_balance: number;
+      }>(`/generation/${lastFailedJobId}/retry`, { method: "POST" });
+
+      refreshUser();
+      setActiveJobId(res.job_id);
+      attachStream(res.job_id);
+    } catch (err: any) {
+      setIsGenerating(false);
+      setJobProgress(null);
+      setErrorMessage(err.message || "Retry failed.");
+    }
+  };
+
+  // SSE Stream Listener
+  const attachStream = (jobId: string) => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    const eventSource = new EventSource(`/api/v1/jobs/${jobId}/stream`);
+    eventSourceRef.current = eventSource;
+
+    eventSource.addEventListener("progress", (evt) => {
+      try {
+        const payload = JSON.parse(evt.data);
+        setJobProgress({
+          phase: payload.phase ? payload.phase.replace(/_/g, " ") : "Processing",
+          progress: payload.progress_percentage || 25,
+          current_stage: payload.current_stage || "Synthesizing audio",
+        });
+      } catch {}
+    });
+
+    eventSource.addEventListener("complete", (evt) => {
+      try {
+        const payload = JSON.parse(evt.data);
+        eventSource.close();
+        setIsGenerating(false);
+        setJobProgress(null);
+        setActiveJobId(null);
+        refreshUser();
+
+        // Primary Variant A
+        const trackA: TrackItem = {
+          id: payload.track_id,
+          title: `${genre} Opus ${musicalKey} (Take 1)`,
+          genre,
+          duration_seconds: payload.duration_seconds || duration,
+          audio_url: payload.audio_url,
+          waveform_data: payload.waveform,
+          bpm,
+          musical_key: musicalKey,
+          commercial_rights_status:
+            user?.role === "pro_producer" || user?.role === "studio"
+              ? "commercial_granted"
+              : "non_commercial_personal",
+        };
+        setVariantA(trackA);
+        playTrack(trackA);
+
+        // Variant B if present
+        if (payload.second_audio_url) {
+          const trackB: TrackItem = {
+            id: `${payload.track_id}-take2`,
+            title: `${genre} Opus ${musicalKey} (Take 2 - Alternate Harmonics)`,
+            genre,
+            duration_seconds: payload.duration_seconds || duration,
+            audio_url: payload.second_audio_url,
+            bpm,
+            musical_key: musicalKey,
+            commercial_rights_status:
+              user?.role === "pro_producer" || user?.role === "studio"
+                ? "commercial_granted"
+                : "non_commercial_personal",
+          };
+          setVariantB(trackB);
+        } else {
+          setVariantB(null);
+        }
+      } catch {}
+    });
+
+    eventSource.addEventListener("error", (evt: any) => {
+      eventSource.close();
+      setIsGenerating(false);
+      setJobProgress(null);
+      setLastFailedJobId(jobId);
+      try {
+        const errData = JSON.parse(evt.data || "{}");
+        setErrorMessage(errData.error_message || "Generation worker encountered an error.");
+      } catch {
+        setErrorMessage("Connection to generation worker was interrupted.");
+      }
+    });
+  };
+
+  // Submit Generation Request
+  const handleGenerate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setVariantA(null);
+    setVariantB(null);
+
+    // Client-side Capability Validation Checks
+    if (activeProvider) {
+      if (lyrics.trim() && !activeProvider.supports_lyrics) {
+        setErrorMessage(
+          `Provider '${activeProvider.display_name}' does not support lyrics synthesis. Please clear lyrics or switch to a lyric-capable provider (e.g. Suno).`
+        );
+        return;
+      }
+      if (!makeInstrumental && !activeProvider.supports_vocals) {
+        setErrorMessage(
+          `Provider '${activeProvider.display_name}' does not support singing or vocal synthesis. Please enable Instrumental mode or select a vocal-capable provider.`
+        );
+        return;
+      }
+    }
+
+    setIsGenerating(true);
+    setJobProgress({
+      phase: "Submitting generation task...",
+      progress: 5,
+      current_stage: "Validating provider constraints",
+    });
+
+    try {
+      const res = await apiRequest<{
+        job_id: string;
+        status: string;
+        remaining_balance: number;
+        variants_supported: boolean;
       }>("/generation/create", {
         method: "POST",
         body: JSON.stringify({
           prompt,
-          negative_prompt: negativePrompt,
+          negative_prompt: mode === "custom" ? negativePrompt : undefined,
+          make_instrumental: makeInstrumental,
+          lyrics: !makeInstrumental && lyrics.trim() ? lyrics : undefined,
           genre,
-          style_tags: [genre.toLowerCase(), "studio-master", musicalKey],
+          mood,
+          instruments: selectedInstruments,
+          style_tags: [genre.toLowerCase(), mood.toLowerCase(), ...selectedInstruments.slice(0, 2)],
           bpm,
           musical_key: musicalKey,
           duration_seconds: duration,
-          provider: selectedProvider,
+          provider: selectedProviderId,
           model_name: selectedModel,
+          generate_two_variants: generateTwoVariants && (activeProvider?.supports_dual_variants ?? false),
         }),
       });
 
       refreshUser();
       const jobId = res.job_id;
-      setJobProgress({ phase: "Queued in audio worker cluster...", progress: 15, job_id: jobId });
-
-      // Connect to SSE stream
-      const eventSource = new EventSource(`/api/v1/jobs/${jobId}/stream`);
-
-      eventSource.addEventListener("progress", (evt) => {
-        try {
-          const payload = JSON.parse(evt.data);
-          setJobProgress({
-            phase: payload.phase.replace(/_/g, " "),
-            progress: payload.progress_percentage,
-            job_id: jobId,
-          });
-        } catch {}
+      setActiveJobId(jobId);
+      setJobProgress({
+        phase: "Queued in audio inference cluster...",
+        progress: 15,
+        current_stage: "Synthesizing audio harmonics",
       });
 
-      eventSource.addEventListener("complete", (evt) => {
-        try {
-          const payload = JSON.parse(evt.data);
-          eventSource.close();
-          setIsGenerating(false);
-          setJobProgress(null);
-
-          const newTrack: TrackItem = {
-            id: payload.track_id,
-            title: `${genre} Opus ${musicalKey}`,
-            genre,
-            duration_seconds: payload.duration_seconds || duration,
-            audio_url: payload.audio_url,
-            waveform_data: payload.waveform,
-            bpm,
-            musical_key: musicalKey,
-            commercial_rights_status: user?.role in ["pro_producer", "studio"] ? "commercial_granted" : "non_commercial_personal",
-          };
-
-          setCreatedTrack(newTrack);
-          playTrack(newTrack);
-        } catch {}
-      });
-
-      eventSource.addEventListener("error", (evt: any) => {
-        eventSource.close();
-        setIsGenerating(false);
-        try {
-          const errData = JSON.parse(evt.data || "{}");
-          setErrorMessage(errData.error_message || "Generation worker encountered an error.");
-        } catch {
-          setErrorMessage("Connection to generation worker was interrupted.");
-        }
-      });
+      attachStream(jobId);
     } catch (err: any) {
       setIsGenerating(false);
       setJobProgress(null);
@@ -173,29 +396,141 @@ export default function CreateStudioPage() {
     }
   };
 
-  const activeProviderObj = providers.find((p) => p.provider_id === selectedProvider);
+  // Warning calculations
+  const lyricsWarning =
+    Boolean(lyrics.trim()) && activeProvider && !activeProvider.supports_lyrics;
+  const vocalsWarning =
+    !makeInstrumental && activeProvider && !activeProvider.supports_vocals;
 
   return (
-    <div className="py-6 max-w-5xl mx-auto space-y-8">
-      {/* Title */}
-      <div>
-        <h1 className="text-2xl md:text-3xl font-extrabold text-white flex items-center gap-3">
-          <Sparkles className="w-7 h-7 text-neon-cyan" />
-          AI Composition Studio
-        </h1>
-        <p className="text-xs md:text-sm text-studio-400 mt-1">
-          Craft algorithmic polyphony, full songs, or stem foundations with honest provider capability governance.
-        </p>
+    <div className="py-6 max-w-6xl mx-auto space-y-8">
+      {/* Studio Header & Mode Switcher */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-studio-800/80 pb-6">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-extrabold text-white flex items-center gap-3">
+            <Sparkles className="w-7 h-7 text-neon-cyan" />
+            AI Music Creation Studio
+          </h1>
+          <p className="text-xs md:text-sm text-studio-400 mt-1">
+            Real asynchronous AI music synthesis with verified provider governance and C2PA provenance.
+          </p>
+        </div>
+
+        {/* Mode Selector Tabs */}
+        <div className="flex items-center gap-1 bg-studio-900 border border-studio-800 p-1.5 rounded-xl self-start md:self-auto shadow-inner">
+          <button
+            type="button"
+            onClick={() => setMode("simple")}
+            className={`px-4 py-2 rounded-lg text-xs font-semibold font-mono tracking-wider transition ${
+              mode === "simple"
+                ? "bg-neon-cyan text-studio-950 shadow-md font-bold"
+                : "text-studio-400 hover:text-studio-200"
+            }`}
+          >
+            Simple Mode
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("custom")}
+            className={`px-4 py-2 rounded-lg text-xs font-semibold font-mono tracking-wider transition ${
+              mode === "custom"
+                ? "bg-neon-cyan text-studio-950 shadow-md font-bold"
+                : "text-studio-400 hover:text-studio-200"
+            }`}
+          >
+            Custom Studio Mode
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Left Form (2 cols) */}
+        {/* Main Creation Form (2 cols) */}
         <form onSubmit={handleGenerate} className="lg:col-span-2 space-y-6">
+          {/* Capability Warnings Banner if controls exceed provider capacity */}
+          {(lyricsWarning || vocalsWarning) && (
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-amber-300 text-xs">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-400" />
+              <div>
+                <strong className="font-semibold block mb-0.5">Model Capability Notice</strong>
+                {vocalsWarning && (
+                  <p>
+                    Provider &quot;{activeProvider?.display_name}&quot; does not support singing vocals.
+                    Switch to Suno API or enable Instrumental mode.
+                  </p>
+                )}
+                {lyricsWarning && (
+                  <p>
+                    Provider &quot;{activeProvider?.display_name}&quot; does not synthesize lyrics. Lyrics
+                    will be ignored unless a vocal-capable provider is chosen.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Instrumental vs Vocal Toggle */}
+          <div className="bg-studio-900 border border-studio-800 rounded-2xl p-4 flex items-center justify-between shadow-xl">
+            <div className="space-y-0.5">
+              <span className="text-xs font-bold uppercase font-mono tracking-wider text-studio-200 block">
+                Instrumental Master
+              </span>
+              <p className="text-[11px] text-studio-400">
+                {makeInstrumental
+                  ? "Pure polyphonic instrumentation (no vocals or singing voices)"
+                  : "Include singing voices and vocal harmonies (requires vocal-capable provider)"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMakeInstrumental(!makeInstrumental)}
+              className={`p-1.5 rounded-xl border transition flex items-center gap-2 text-xs font-mono font-bold ${
+                makeInstrumental
+                  ? "bg-neon-cyan/20 border-neon-cyan text-neon-cyan"
+                  : "bg-studio-800 border-studio-700 text-studio-300"
+              }`}
+            >
+              {makeInstrumental ? (
+                <>
+                  <ToggleRight className="w-5 h-5 text-neon-cyan" /> Instrumental On
+                </>
+              ) : (
+                <>
+                  <ToggleLeft className="w-5 h-5 text-studio-400" /> Vocals Enabled
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Optional Lyrics Box (Shown in Custom mode or when instrumental is turned OFF) */}
+          {(!makeInstrumental || mode === "custom") && (
+            <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 space-y-3 shadow-xl">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold uppercase font-mono tracking-wider text-studio-300 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-neon-pink" />
+                  Optional Lyrics & Song Structure
+                </label>
+                <span className="text-[11px] font-mono text-studio-500">
+                  {lyrics.length} / 5000 chars
+                </span>
+              </div>
+              <textarea
+                value={lyrics}
+                onChange={(e) => setLyrics(e.target.value)}
+                rows={4}
+                placeholder="[Verse 1]&#10;Neon streetlights in the rain&#10;Echoes of a forgotten name...&#10;&#10;[Chorus]&#10;Carry me through the electric night..."
+                className="w-full bg-studio-950 border border-studio-800 rounded-xl p-3 text-xs text-studio-100 placeholder-studio-600 focus:outline-none focus:border-neon-pink/50 transition font-mono resize-y"
+              />
+              <p className="text-[11px] text-studio-500">
+                Tip: Structure lyrics using tags like [Verse], [Chorus], [Bridge], [Outro] for optimal phrasing.
+              </p>
+            </div>
+          )}
+
           {/* Prompt Box */}
           <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 space-y-3 shadow-xl">
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold uppercase font-mono tracking-wider text-studio-300">
-                Acoustic & Harmonic Prompt
+                Acoustic & Musical Prompt
               </label>
               <span className="text-[11px] font-mono text-studio-500">{prompt.length} / 1500</span>
             </div>
@@ -203,37 +538,45 @@ export default function CreateStudioPage() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={3}
-              placeholder="Describe instruments, tempo, atmosphere, mood, rhythm..."
+              placeholder="Describe instruments, tempo, atmosphere, mood, rhythm, chord progressions..."
               className="w-full bg-studio-950 border border-studio-800 rounded-xl p-3 text-sm text-studio-100 placeholder-studio-600 focus:outline-none focus:border-neon-cyan/50 focus:ring-1 focus:ring-neon-cyan/30 transition resize-none"
               required
             />
 
-            {/* Quick Style Tags */}
+            {/* Quick Style Presets */}
             <div className="flex flex-wrap gap-2 pt-1 text-xs">
               <button
                 type="button"
-                onClick={() => handleStylePreset("80s gated snare, analog brass", "Synthwave", "F Minor", 124)}
+                onClick={() =>
+                  applyPreset("80s gated snare, analog brass", "Synthwave", "F Minor", 124, "Nostalgic")
+                }
                 className="px-2.5 py-1 rounded-lg bg-studio-800 hover:bg-studio-750 text-studio-300 border border-studio-700 transition"
               >
                 + Synthwave 80s
               </button>
               <button
                 type="button"
-                onClick={() => handleStylePreset("dusty vinyl crackle, rhodes piano", "Lo-Fi", "Eb Major", 85)}
+                onClick={() =>
+                  applyPreset("dusty vinyl crackle, rhodes piano", "Lo-Fi", "Eb Major", 85, "Chill & Relaxed")
+                }
                 className="px-2.5 py-1 rounded-lg bg-studio-800 hover:bg-studio-750 text-studio-300 border border-studio-700 transition"
               >
                 + Lo-Fi Chill
               </button>
               <button
                 type="button"
-                onClick={() => handleStylePreset("orchestral brass, pounding timpani", "Cinematic", "D Minor", 110)}
+                onClick={() =>
+                  applyPreset("epic brass, pounding timpani", "Cinematic", "D Minor", 110, "Epic & Triumphant")
+                }
                 className="px-2.5 py-1 rounded-lg bg-studio-800 hover:bg-studio-750 text-studio-300 border border-studio-700 transition"
               >
-                + Cinematic Hans
+                + Cinematic Epic
               </button>
               <button
                 type="button"
-                onClick={() => handleStylePreset("deep 808 sub, four on the floor", "Deep House", "G Minor", 126)}
+                onClick={() =>
+                  applyPreset("deep 808 sub, four on the floor", "Deep House", "G Minor", 126, "Euphoric")
+                }
                 className="px-2.5 py-1 rounded-lg bg-studio-800 hover:bg-studio-750 text-studio-300 border border-studio-700 transition"
               >
                 + Deep House
@@ -241,21 +584,86 @@ export default function CreateStudioPage() {
             </div>
           </div>
 
-          {/* Negative Prompt */}
-          <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 space-y-2 shadow-xl">
-            <label className="text-xs font-semibold uppercase font-mono tracking-wider text-studio-400">
-              Negative Conditioning (Exclude from Audio)
-            </label>
-            <input
-              type="text"
-              value={negativePrompt}
-              onChange={(e) => setNegativePrompt(e.target.value)}
-              placeholder="e.g. vocals, harsh noise, acoustic guitars"
-              className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-studio-200 placeholder-studio-600 focus:outline-none focus:border-neon-cyan/50 transition"
-            />
+          {/* Genre and Mood Selection */}
+          <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 grid grid-cols-1 sm:grid-cols-2 gap-5 shadow-xl">
+            <div className="space-y-1.5">
+              <label className="text-xs text-studio-400 font-mono block">GENRE</label>
+              <select
+                value={genre}
+                onChange={(e) => setGenre(e.target.value)}
+                className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-studio-200 focus:outline-none focus:border-neon-cyan/50"
+              >
+                {GENRES.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs text-studio-400 font-mono block">MOOD & ATMOSPHERE</label>
+              <select
+                value={mood}
+                onChange={(e) => setMood(e.target.value)}
+                className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-studio-200 focus:outline-none focus:border-neon-cyan/50"
+              >
+                {MOODS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          {/* Musical Parameters Grid */}
+          {/* Custom Mode Extra Controls */}
+          {mode === "custom" && (
+            <>
+              {/* Instruments Multi-Select */}
+              <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 space-y-3 shadow-xl">
+                <label className="text-xs font-semibold uppercase font-mono tracking-wider text-studio-300 block">
+                  Lead & Harmonic Instrumentation
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {AVAILABLE_INSTRUMENTS.map((inst) => {
+                    const isSelected = selectedInstruments.includes(inst);
+                    return (
+                      <button
+                        key={inst}
+                        type="button"
+                        onClick={() => toggleInstrument(inst)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-mono transition border ${
+                          isSelected
+                            ? "bg-neon-cyan/20 border-neon-cyan text-neon-cyan font-semibold"
+                            : "bg-studio-950 border-studio-800 text-studio-400 hover:border-studio-700"
+                        }`}
+                      >
+                        {isSelected ? "✓ " : "+ "}
+                        {inst}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Negative Prompt Conditioning */}
+              <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 space-y-2 shadow-xl">
+                <label className="text-xs font-semibold uppercase font-mono tracking-wider text-studio-400">
+                  Negative Conditioning (Exclude from Audio)
+                </label>
+                <input
+                  type="text"
+                  value={negativePrompt}
+                  onChange={(e) => setNegativePrompt(e.target.value)}
+                  placeholder="e.g. vocals, harsh distortion, clipping, acoustic guitars"
+                  className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 text-xs text-studio-200 placeholder-studio-600 focus:outline-none focus:border-neon-cyan/50 transition"
+                />
+              </div>
+            </>
+          )}
+
+          {/* Musical Parameters: BPM, Key, Duration, Dual Variants */}
           <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 grid grid-cols-1 sm:grid-cols-3 gap-5 shadow-xl">
             {/* BPM */}
             <div className="space-y-1.5">
@@ -275,7 +683,7 @@ export default function CreateStudioPage() {
 
             {/* Musical Key */}
             <div className="space-y-1.5">
-              <span className="text-xs text-studio-400 font-mono block">MUSICAL KEY</span>
+              <span className="text-xs text-studio-400 font-mono block">KEY SIGNATURE</span>
               <select
                 value={musicalKey}
                 onChange={(e) => setMusicalKey(e.target.value)}
@@ -300,52 +708,98 @@ export default function CreateStudioPage() {
                 onChange={(e) => setDuration(parseInt(e.target.value))}
                 className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-1.5 text-xs text-studio-200 focus:outline-none focus:border-neon-cyan/50"
               >
-                <option value={15}>15 Seconds (Quick Preview)</option>
-                <option value={30}>30 Seconds (Standard Track)</option>
-                <option value={60}>60 Seconds (Full Theme)</option>
-                <option value={120}>120 Seconds (Extended Opus)</option>
+                <option value={15}>15s (Quick Preview)</option>
+                <option value={30}>30s (Standard Opus)</option>
+                <option value={60}>60s (Extended Theme)</option>
+                <option value={120}>120s (Full Arrangement)</option>
               </select>
             </div>
           </div>
+
+          {/* Dual Variant Toggle (Only if provider supports it) */}
+          {activeProvider?.supports_dual_variants && (
+            <div className="bg-studio-900 border border-studio-800 rounded-2xl p-4 flex items-center justify-between shadow-xl">
+              <div>
+                <span className="text-xs font-bold uppercase font-mono tracking-wider text-studio-200 block">
+                  Dual Output Variants (Take 1 & Take 2)
+                </span>
+                <p className="text-[11px] text-studio-400">
+                  Synthesize two distinct harmonic variations simultaneously (+3 credits).
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={generateTwoVariants}
+                onChange={(e) => setGenerateTwoVariants(e.target.checked)}
+                className="w-5 h-5 accent-neon-cyan cursor-pointer rounded"
+              />
+            </div>
+          )}
 
           {/* Error Notice */}
           {errorMessage && (
             <div className="p-4 rounded-xl bg-neon-crimson/10 border border-neon-crimson/30 flex items-start gap-3 text-neon-crimson text-xs">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-              <div>
-                <strong className="font-semibold block mb-0.5">Configuration / Validation Notice</strong>
+              <div className="flex-1">
+                <strong className="font-semibold block mb-0.5">Generation Notice</strong>
                 <span>{errorMessage}</span>
               </div>
+              {lastFailedJobId && (
+                <button
+                  type="button"
+                  onClick={handleRetryJob}
+                  className="px-3 py-1.5 bg-neon-crimson text-white font-bold rounded-lg hover:opacity-90 flex items-center gap-1.5 transition self-center"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Retry
+                </button>
+              )}
             </div>
           )}
 
-          {/* Submit Action */}
-          <button
-            type="submit"
-            disabled={isGenerating}
-            className="w-full py-4 rounded-2xl bg-gradient-to-r from-neon-cyan via-neon-purple to-neon-pink text-studio-950 font-bold text-sm tracking-wide uppercase hover:opacity-95 active:scale-[0.99] disabled:opacity-50 transition shadow-xl shadow-neon-cyan/20 flex items-center justify-center gap-2"
-          >
-            <Sparkles className="w-4 h-4 fill-current" />
-            <span>{isGenerating ? "Synthesizing Audio..." : "Generate Master Track (5 Credits)"}</span>
-          </button>
+          {/* Submit & Cancel Actions */}
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              disabled={isGenerating}
+              className="flex-1 py-4 rounded-2xl bg-gradient-to-r from-neon-cyan via-neon-purple to-neon-pink text-studio-950 font-bold text-sm tracking-wide uppercase hover:opacity-95 active:scale-[0.99] disabled:opacity-50 transition shadow-xl shadow-neon-cyan/20 flex items-center justify-center gap-2"
+            >
+              <Sparkles className="w-4 h-4 fill-current" />
+              <span>
+                {isGenerating
+                  ? "Synthesizing Audio..."
+                  : `Generate Master Audio (${estimatedCredits} Credits)`}
+              </span>
+            </button>
+
+            {isGenerating && (
+              <button
+                type="button"
+                onClick={handleCancelJob}
+                className="px-5 py-4 rounded-2xl bg-studio-800 hover:bg-neon-crimson/20 border border-studio-700 hover:border-neon-crimson text-studio-200 hover:text-neon-crimson font-bold text-xs font-mono tracking-wider transition flex items-center gap-2"
+              >
+                <XCircle className="w-4 h-4" /> Cancel
+              </button>
+            )}
+          </div>
         </form>
 
-        {/* Right Sidebar: Provider Capability & Status (1 col) */}
+        {/* Right Sidebar: Provider Capabilities & Output Variants (1 col) */}
         <div className="space-y-6">
+          {/* Provider Selector Card */}
           <div className="bg-studio-900 border border-studio-800 rounded-2xl p-5 space-y-4 shadow-xl">
             <h3 className="text-xs font-semibold uppercase font-mono tracking-wider text-studio-300 flex items-center gap-2">
               <Cpu className="w-4 h-4 text-neon-cyan" />
-              Model & Engine Provider
+              AI Inference Engine
             </h3>
 
-            {/* Provider Selector */}
+            {/* Provider List */}
             <div className="space-y-2.5">
               {providers.map((p) => {
-                const isSelected = selectedProvider === p.provider_id;
+                const isSelected = selectedProviderId === p.provider_id;
                 return (
                   <div
                     key={p.provider_id}
-                    onClick={() => handleProviderChange(p.provider_id)}
+                    onClick={() => handleProviderSelect(p.provider_id)}
                     className={`p-3 rounded-xl border text-xs cursor-pointer transition ${
                       isSelected
                         ? "bg-studio-850 border-neon-cyan/50 text-studio-100 shadow-md shadow-neon-cyan/5"
@@ -364,16 +818,35 @@ export default function CreateStudioPage() {
                         </span>
                       )}
                     </div>
-                    {p.configuration_message && (
-                      <p className="text-[11px] text-studio-500 mt-1">{p.configuration_message}</p>
-                    )}
+                    <p className="text-[11px] text-studio-500 mt-1 line-clamp-2">{p.description}</p>
+
+                    {/* Capabilities Badges */}
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {p.supports_vocals ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">
+                          Vocals
+                        </span>
+                      ) : (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-studio-800 text-studio-500 font-mono">
+                          Instrumental Only
+                        </span>
+                      )}
+                      {p.supports_dual_variants && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-neon-cyan/10 text-neon-cyan font-mono">
+                          Dual Variants
+                        </span>
+                      )}
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-studio-800 text-studio-400 font-mono">
+                        {p.min_duration_seconds}s-{p.max_duration_seconds}s
+                      </span>
+                    </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* Model checkpoint dropdown */}
-            {activeProviderObj && activeProviderObj.models_available.length > 0 && (
+            {/* Model Checkpoint Dropdown */}
+            {activeProvider && activeProvider.models_available.length > 0 && (
               <div className="space-y-1.5 pt-2 border-t border-studio-800">
                 <span className="text-[11px] text-studio-400 font-mono block">CHECKPOINT</span>
                 <select
@@ -381,7 +854,7 @@ export default function CreateStudioPage() {
                   onChange={(e) => setSelectedModel(e.target.value)}
                   className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-1.5 text-xs text-studio-200 focus:outline-none"
                 >
-                  {activeProviderObj.models_available.map((m) => (
+                  {activeProvider.models_available.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
@@ -393,10 +866,13 @@ export default function CreateStudioPage() {
 
           {/* Active Generation Progress Card */}
           {isGenerating && jobProgress && (
-            <div className="bg-studio-900 border border-neon-cyan/30 rounded-2xl p-5 space-y-3 animate-pulse shadow-xl">
+            <div className="bg-studio-900 border border-neon-cyan/30 rounded-2xl p-5 space-y-3 shadow-xl">
               <div className="flex items-center justify-between text-xs">
-                <span className="font-mono text-neon-cyan font-semibold">SYNTHESIS ACTIVE</span>
-                <span className="font-mono text-studio-300">{jobProgress.progress}%</span>
+                <span className="font-mono text-neon-cyan font-semibold flex items-center gap-1.5">
+                  <Radio className="w-4 h-4 animate-pulse text-neon-cyan" />
+                  SYNTHESIS ACTIVE
+                </span>
+                <span className="font-mono text-studio-300 font-bold">{jobProgress.progress}%</span>
               </div>
               <div className="w-full h-2 bg-studio-800 rounded-full overflow-hidden">
                 <div
@@ -404,19 +880,20 @@ export default function CreateStudioPage() {
                   style={{ width: `${jobProgress.progress}%` }}
                 ></div>
               </div>
-              <p className="text-[11px] text-studio-400 capitalize">{jobProgress.phase}</p>
+              <p className="text-[11px] text-studio-300 capitalize">{jobProgress.current_stage || jobProgress.phase}</p>
             </div>
           )}
 
-          {/* Result Card */}
-          {createdTrack && (
+          {/* Variant A Result Card */}
+          {variantA && (
             <div className="bg-gradient-to-br from-studio-900 to-studio-850 border border-emerald-500/30 rounded-2xl p-5 space-y-4 shadow-2xl">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-mono text-emerald-400 font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4" /> MASTER RENDERED
+                  <CheckCircle2 className="w-4 h-4" /> MASTER RENDERED (TAKE 1)
                 </span>
                 <button
-                  onClick={() => setInspectProvenanceId(createdTrack.id)}
+                  type="button"
+                  onClick={() => setInspectProvenanceId(variantA.id)}
                   className="text-[10px] font-mono text-neon-cyan flex items-center gap-1 bg-neon-cyan/10 px-2 py-0.5 rounded border border-neon-cyan/20"
                 >
                   <ShieldCheck className="w-3 h-3" /> C2PA
@@ -424,22 +901,21 @@ export default function CreateStudioPage() {
               </div>
 
               <div>
-                <h4 className="font-bold text-sm text-white">{createdTrack.title}</h4>
+                <h4 className="font-bold text-sm text-white">{variantA.title}</h4>
                 <p className="text-xs text-studio-400 mt-0.5">
-                  {createdTrack.genre} • {createdTrack.bpm} BPM • {createdTrack.musical_key}
+                  {variantA.genre} • {variantA.bpm} BPM • {variantA.musical_key} • {variantA.duration_seconds}s
                 </p>
               </div>
 
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={() =>
-                    isPlaying && currentTrack?.id === createdTrack.id
-                      ? togglePlay()
-                      : playTrack(createdTrack)
+                    isPlaying && currentTrack?.id === variantA.id ? togglePlay() : playTrack(variantA)
                   }
                   className="flex-1 py-2.5 rounded-xl bg-neon-cyan text-studio-950 font-bold text-xs flex items-center justify-center gap-2 transition hover:opacity-90"
                 >
-                  {isPlaying && currentTrack?.id === createdTrack.id ? (
+                  {isPlaying && currentTrack?.id === variantA.id ? (
                     <>
                       <Pause className="w-4 h-4 fill-current" /> Pause
                     </>
@@ -450,7 +926,14 @@ export default function CreateStudioPage() {
                   )}
                 </button>
                 <a
-                  href={`/stems?track_id=${createdTrack.id}`}
+                  href={`/studio?track_id=${variantA.id}`}
+                  className="px-3 py-2.5 rounded-xl bg-studio-800 hover:bg-studio-750 text-studio-200 text-xs flex items-center gap-1.5 transition border border-studio-700"
+                  title="Open in Multitrack Studio"
+                >
+                  <SlidersHorizontal className="w-4 h-4" />
+                </a>
+                <a
+                  href={`/stems?track_id=${variantA.id}`}
                   className="px-3 py-2.5 rounded-xl bg-studio-800 hover:bg-studio-750 text-studio-200 text-xs flex items-center gap-1.5 transition border border-studio-700"
                   title="Separate into 4 Stems"
                 >
@@ -459,11 +942,55 @@ export default function CreateStudioPage() {
               </div>
             </div>
           )}
+
+          {/* Variant B Result Card (If Dual Variants Generated) */}
+          {variantB && (
+            <div className="bg-gradient-to-br from-studio-900 to-studio-850 border border-neon-purple/30 rounded-2xl p-5 space-y-4 shadow-2xl">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-mono text-neon-purple font-bold flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" /> ALTERNATE HARMONIC (TAKE 2)
+                </span>
+                <span className="text-[10px] font-mono text-studio-400 bg-studio-800 px-2 py-0.5 rounded">
+                  Dual Variant
+                </span>
+              </div>
+
+              <div>
+                <h4 className="font-bold text-sm text-white">{variantB.title}</h4>
+                <p className="text-xs text-studio-400 mt-0.5">
+                  {variantB.genre} • {variantB.bpm} BPM • {variantB.musical_key} • {variantB.duration_seconds}s
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    isPlaying && currentTrack?.id === variantB.id ? togglePlay() : playTrack(variantB)
+                  }
+                  className="flex-1 py-2.5 rounded-xl bg-neon-purple text-white font-bold text-xs flex items-center justify-center gap-2 transition hover:opacity-90"
+                >
+                  {isPlaying && currentTrack?.id === variantB.id ? (
+                    <>
+                      <Pause className="w-4 h-4 fill-current" /> Pause
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4 fill-current ml-0.5" /> Play Take 2
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {inspectProvenanceId && (
-        <ProvenanceModal trackId={inspectProvenanceId} onClose={() => setInspectProvenanceId(null)} />
+        <ProvenanceModal
+          trackId={inspectProvenanceId}
+          onClose={() => setInspectProvenanceId(null)}
+        />
       )}
     </div>
   );
