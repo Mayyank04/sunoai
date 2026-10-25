@@ -1,0 +1,139 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fombo-postgres-prod
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fombo_music}
+      POSTGRES_USER: ${POSTGRES_USER:-fombo_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeThisSuperSecureDbPassword2026!}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fombo_admin} -d ${POSTGRES_DB:-fombo_music}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: fombo-redis-prod
+    restart: always
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fombo-api-prod
+    restart: always
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - APP_ENV=production
+      - DEBUG=false
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-fombo_admin}:${POSTGRES_PASSWORD:-ChangeThisSuperSecureDbPassword2026!}@postgres:5432/${POSTGRES_DB:-fombo_music}
+      - SYNC_DATABASE_URL=postgresql://${POSTGRES_USER:-fombo_admin}:${POSTGRES_PASSWORD:-ChangeThisSuperSecureDbPassword2026!}@postgres:5432/${POSTGRES_DB:-fombo_music}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/2
+      - SECRET_KEY=${SECRET_KEY}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-r2}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - S3_REGION=${S3_REGION:-auto}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-fombo-music-prod}
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
+      - RAZORPAY_WEBHOOK_SECRET=${RAZORPAY_WEBHOOK_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  celery_generation_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fombo-worker-generation
+    restart: always
+    command: ["celery", "-A", "backend.app.core.celery_app.celery_app", "worker", "--loglevel=info", "-Q", "generation", "-c", "4"]
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-fombo_admin}:${POSTGRES_PASSWORD:-ChangeThisSuperSecureDbPassword2026!}@postgres:5432/${POSTGRES_DB:-fombo_music}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/2
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-r2}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  celery_stems_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fombo-worker-stems
+    restart: always
+    command: ["celery", "-A", "backend.app.core.celery_app.celery_app", "worker", "--loglevel=info", "-Q", "stems,audio_processing", "-c", "2"]
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-fombo_admin}:${POSTGRES_PASSWORD:-ChangeThisSuperSecureDbPassword2026!}@postgres:5432/${POSTGRES_DB:-fombo_music}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/2
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-r2}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fombo-celery-beat-prod
+    restart: always
+    command: ["celery", "-A", "backend.app.core.celery_app.celery_app", "beat", "--loglevel=info"]
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-ChangeThisSecureRedisSecret2026!}@redis:6379/2
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

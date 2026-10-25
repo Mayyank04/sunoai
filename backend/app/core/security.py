@@ -131,3 +131,67 @@ def require_role(required_role: Any):
                 )
         return current_user
     return role_checker
+
+
+import ipaddress
+import re
+import socket
+from urllib.parse import urlparse
+
+def validate_safe_url(url: str, allow_private: bool = False) -> str:
+    """
+    Validates that a URL is well-formed, uses http/https, and does not resolve
+    to loopback, private, link-local, or multicast IP addresses (SSRF mitigation).
+    """
+    if not url or not isinstance(url, str):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL format.")
+
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in ("http", "https"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Scheme '{parsed.scheme}' is not allowed. Only HTTP and HTTPS are permitted."
+        )
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL is missing hostname.")
+
+    forbidden_hosts = {"localhost", "127.0.0.1", "::1", "metadata.google.internal"}
+    if hostname.lower() in forbidden_hosts and not allow_private:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Access to internal/loopback hosts is forbidden (SSRF protection).")
+
+    # Check IP or resolve hostname
+    try:
+        ip = ipaddress.ip_address(hostname)
+        ips = [ip]
+    except ValueError:
+        try:
+            addr_info = socket.getaddrinfo(hostname, None)
+            ips = [ipaddress.ip_address(addr[4][0]) for addr in addr_info]
+        except Exception:
+            ips = []
+
+    if not allow_private:
+        for ip in ips:
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Access to private/internal IP address '{ip}' is blocked (SSRF protection)."
+                )
+
+    return url
+
+def sanitize_user_input(content: str) -> str:
+    """
+    Sanitizes user-provided text content against stored XSS by neutralizing HTML tags,
+    javascript: schemas, and event handlers.
+    """
+    if not content or not isinstance(content, str):
+        return ""
+    clean = re.sub(r"<\s*script[^>]*>.*?<\s*/\s*script\s*>", "", content, flags=re.IGNORECASE | re.DOTALL)
+    clean = re.sub(r"<\s*iframe[^>]*>.*?<\s*/\s*iframe\s*>", "", clean, flags=re.IGNORECASE | re.DOTALL)
+    clean = re.sub(r"javascript\s*:", "blocked-javascript:", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"on\w+\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^\s>]+)", "", clean, flags=re.IGNORECASE)
+    clean = clean.replace("<", "&lt;").replace(">", "&gt;")
+    return clean

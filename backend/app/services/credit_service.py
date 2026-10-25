@@ -231,3 +231,5 @@ class CreditService:
         await db.commit()
         await db.refresh(ledger_entry)
         return ledger_entry
+
+credit_service = CreditService()

@@ -40,3 +40,7 @@ storage_data/recordings/*
 # OS Artifacts
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+frontend/test-results/
+frontend/playwright-report/
