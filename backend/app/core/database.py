@@ -4,18 +4,23 @@ from backend.app.core.config import settings
 from typing import AsyncGenerator
 import os
 
-# Ensure local storage and db directories exist
-db_url = settings.DATABASE_URL
+db_url = settings.get_database_url()
+engine_kwargs = {"echo": False, "future": True}
+
 if db_url.startswith("sqlite"):
     db_file_path = db_url.replace("sqlite+aiosqlite:///", "").replace("sqlite:///", "")
     if db_file_path and not db_file_path.startswith(":memory:"):
         os.makedirs(os.path.dirname(os.path.abspath(db_file_path)) or ".", exist_ok=True)
+else:
+    # PostgreSQL connection pool settings
+    engine_kwargs.update({
+        "pool_size": 20,
+        "max_overflow": 10,
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,
+    })
 
-async_engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=False,
-    future=True,
-)
+async_engine = create_async_engine(db_url, **engine_kwargs)
 
 async_session_maker = async_sessionmaker(
     bind=async_engine,

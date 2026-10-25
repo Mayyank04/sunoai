@@ -40,3 +40,11 @@ class Track(Base):
     generations = relationship("Generation", back_populates="track")
     stems = relationship("Stem", back_populates="track", cascade="all, delete-orphan")
     provenance = relationship("Provenance", back_populates="track", uselist=False, cascade="all, delete-orphan")
+    versions = relationship("SongVersion", back_populates="track", cascade="all, delete-orphan")
+    assets = relationship("Asset", back_populates="track")
+    lyric_records = relationship("Lyric", back_populates="track")
+    likes = relationship("Like", back_populates="track", cascade="all, delete-orphan")
+    comments = relationship("Comment", back_populates="track", cascade="all, delete-orphan")
+    licenses = relationship("License", back_populates="track", cascade="all, delete-orphan")
+
+Song = Track  # Canonical alias

@@ -24,10 +24,22 @@ class User(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
-    # Relationships
+    # Core Relationships
+    profile = relationship("Profile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    artist_profile = relationship("Artist", back_populates="user", uselist=False)
     tracks = relationship("Track", back_populates="user", cascade="all, delete-orphan")
     generations = relationship("Generation", back_populates="user", cascade="all, delete-orphan")
     subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
     credit_ledgers = relationship("CreditLedger", back_populates="user", cascade="all, delete-orphan")
     voice_consents = relationship("VoiceConsent", back_populates="user", cascade="all, delete-orphan")
     daw_projects = relationship("DawProject", back_populates="user", cascade="all, delete-orphan")
+    assets = relationship("Asset", back_populates="user", cascade="all, delete-orphan")
+    jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
+    lyrics = relationship("Lyric", back_populates="user", cascade="all, delete-orphan")
+    playlists = relationship("Playlist", back_populates="user", cascade="all, delete-orphan")
+    likes = relationship("Like", back_populates="user", cascade="all, delete-orphan")
+    comments = relationship("Comment", back_populates="user", cascade="all, delete-orphan")
+    licenses = relationship("License", back_populates="user", cascade="all, delete-orphan")
+    payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
+    following = relationship("Follow", foreign_keys="Follow.follower_id", back_populates="follower", cascade="all, delete-orphan")
+    followers = relationship("Follow", foreign_keys="Follow.following_id", back_populates="following", cascade="all, delete-orphan")

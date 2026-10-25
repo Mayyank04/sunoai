@@ -32,3 +32,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+

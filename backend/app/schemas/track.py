@@ -31,3 +31,23 @@ class TrackResponse(BaseModel):
 class TrackListResponse(BaseModel):
     tracks: List[TrackResponse]
     total: int
+
+class TrackCreateRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+    genre: Optional[str] = None
+    style_tags: Optional[List[str]] = None
+    mood: Optional[str] = None
+    bpm: Optional[int] = None
+    musical_key: Optional[str] = None
+    audio_url: str
+    is_public: bool = False
+
+class TrackUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    genre: Optional[str] = None
+    style_tags: Optional[List[str]] = None
+    mood: Optional[str] = None
+    is_public: Optional[bool] = None
+

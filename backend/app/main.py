@@ -10,13 +10,16 @@ async def lifespan(app: FastAPI):
     # Initialize Database Tables
     await init_db()
     yield
-    # Shutdown events if needed
+    # Shutdown cleanup if needed
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="1.0.0-PROD",
-    description="Production-grade AI Audio Creation, Composition & Multitrack DAW Platform API",
-    lifespan=lifespan
+    version="2.0.0-PROD",
+    description="Production-grade AI Audio Creation, Multitrack DAW, C2PA Provenance & Licensing Platform API",
+    openapi_url="/api/v1/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS Middleware Configuration
@@ -26,7 +29,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Range", "Accept-Ranges", "Content-Length"]
+    expose_headers=[
+        "Content-Range",
+        "Accept-Ranges",
+        "Content-Length",
+        "Idempotency-Key",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "Retry-After",
+    ],
 )
 
 # Mount API v1
@@ -36,9 +47,11 @@ app.include_router(api_v1_router)
 async def root():
     return {
         "platform": settings.APP_NAME,
-        "version": "1.0.0-PROD",
+        "version": "2.0.0-PROD",
         "documentation": "/docs",
-        "health": "/api/v1/health"
+        "redoc": "/redoc",
+        "health": "/api/v1/health",
+        "openapi": "/api/v1/openapi.json",
     }
 
 if __name__ == "__main__":

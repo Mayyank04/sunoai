@@ -35,6 +35,8 @@ class StemItem(BaseModel):
     duration_seconds: float
     waveform_data: Optional[List[int]] = None
 
+StemResponse = StemItem
+
 class StemSeparationResponse(BaseModel):
     track_id: str
     stems: List[StemItem]
@@ -64,17 +66,23 @@ class VoiceChallengeResponse(BaseModel):
     instructions: str
     expires_in_seconds: int
 
+VoiceConsentChallengeResponse = VoiceChallengeResponse
+
 class VoiceVerifyRequest(BaseModel):
     challenge_id: str
     voice_label: str
     audio_url: str
     consent_acknowledged: bool
 
+VoiceConsentSubmitRequest = VoiceVerifyRequest
+
 class VoiceConsentResponse(BaseModel):
     id: str
     voice_label: str
     status: str
     signed_at: datetime
+
+VoiceConsentStatusResponse = VoiceConsentResponse
 
 # DAW
 class DawProjectCreateRequest(BaseModel):
@@ -97,3 +105,17 @@ class DawProjectResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# Subscription & Credits
+class SubscriptionResponse(BaseModel):
+    tier: str
+    status: str
+    monthly_credit_allowance: int
+    current_period_end: Optional[datetime] = None
+
+class CreditTransactionResponse(BaseModel):
+    id: str
+    amount: int
+    balance_after: int
+    transaction_type: str
+    created_at: datetime
