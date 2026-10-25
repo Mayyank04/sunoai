@@ -45,6 +45,10 @@ class ProceduralMusicProvider(MusicGenerationProvider):
             configuration_message="Built-in algorithmic synthesizer is online and ready for immediate creation.",
             commercial_grade=True,
             attribution_required=False,
+            provider_type="built_in",
+            status_label="Ready",
+            health_status="healthy",
+            model_revision="procedural-dsp-v1",
         )
 
     async def generate(self, params: GenerationRequestParams) -> GenerationResult:

@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     ENABLE_PROCEDURAL_SYNTH: bool = True
     ACE_STEP_SERVICE_URL: Optional[str] = None
     ACE_STEP_WEIGHTS_PATH: Optional[str] = None
+    ACE_STEP_API_TOKEN: Optional[str] = None
+    ACE_STEP_MODEL_REVISION: str = "v1.5.0-openweight"
     HEARTMULA_SERVICE_URL: Optional[str] = None
     AUDIOCRAFT_SERVICE_URL: Optional[str] = None
     REPLICATE_API_TOKEN: Optional[str] = None

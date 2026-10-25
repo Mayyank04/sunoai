@@ -56,6 +56,11 @@ class HeartMuLaMusicProvider(MusicGenerationProvider):
             configuration_message=msg,
             commercial_grade=True,
             attribution_required=False,
+            provider_type="self_hosted",
+            status_label="Ready" if is_ready else "Worker Offline",
+            health_status="healthy" if is_ready else "offline",
+            model_revision="heartmula-7b-preview (v1.0)",
+            worker_endpoint=settings.HEARTMULA_SERVICE_URL,
         )
 
     async def generate(self, params: GenerationRequestParams) -> GenerationResult:

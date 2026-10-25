@@ -48,6 +48,10 @@ class StabilityAudioProvider(MusicGenerationProvider):
             configuration_message=msg,
             commercial_grade=True,
             attribution_required=False,
+            provider_type="commercial_api",
+            status_label="Ready" if is_ready else "Needs Key",
+            health_status="healthy" if is_ready else "unconfigured",
+            model_revision="stable-audio-open-1.0",
         )
 
     async def generate(self, params: GenerationRequestParams) -> GenerationResult:

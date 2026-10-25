@@ -27,6 +27,11 @@ class ProviderCapabilities(BaseModel):
     configuration_message: Optional[str] = None
     commercial_grade: bool = True
     attribution_required: bool = False
+    provider_type: str = Field(default="built_in", description="built_in, self_hosted, or commercial_api")
+    status_label: str = Field(default="Ready", description="Human-facing status: Ready, Worker Offline, Needs Key")
+    health_status: Optional[str] = Field(default="healthy", description="healthy, offline, or unconfigured")
+    model_revision: Optional[str] = None
+    worker_endpoint: Optional[str] = None
 
 class GenerationRequestParams(BaseModel):
     provider_id: str = "fombo_procedural"
@@ -142,9 +147,33 @@ class MusicGenerationProvider(ABC):
     def getLicenseMetadata(self, tier: str = "creator") -> LicenseMetadata:
         return self.get_license_metadata(tier)
 
+    async def check_health(self) -> Dict[str, Any]:
+        """Checks runtime health of this provider backend."""
+        is_ok, msg = self.validate_configuration()
+        caps = self.get_capabilities()
+        return {
+            "provider_id": self.provider_id,
+            "status": "healthy" if is_ok else "offline",
+            "is_configured": is_ok,
+            "provider_type": caps.provider_type,
+            "status_label": caps.status_label,
+            "message": msg,
+        }
+
+    async def check_readiness(self) -> Dict[str, Any]:
+        """Checks if provider is ready to immediately accept audio generation requests."""
+        is_ok, msg = self.validate_configuration()
+        return {
+            "provider_id": self.provider_id,
+            "ready": is_ok,
+            "status": "ready" if is_ok else "not_ready",
+            "message": msg,
+        }
+
     # Backward compatibility helper for legacy calls
     async def generate_audio(self, params: GenerationRequestParams) -> bytes:
         res = await self.generate(params)
         return res.audio_bytes
 
 BaseMusicProvider = MusicGenerationProvider
+

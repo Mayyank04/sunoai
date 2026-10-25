@@ -27,6 +27,7 @@ import {
   Info,
 } from "lucide-react";
 import { ProvenanceModal } from "@/components/provenance/ProvenanceModal";
+import { AuthModal } from "@/components/ui/auth-modal";
 
 interface ProviderCap {
   provider_id: string;
@@ -49,6 +50,9 @@ interface ProviderCap {
   configuration_message?: string;
   commercial_grade: boolean;
   attribution_required: boolean;
+  provider_type?: string;
+  status_label?: string;
+  model_revision?: string;
 }
 
 const AVAILABLE_INSTRUMENTS = [
@@ -149,8 +153,10 @@ function CreateStudioContent() {
   const [variantA, setVariantA] = useState<TrackItem | null>(null);
   const [variantB, setVariantB] = useState<TrackItem | null>(null);
   const [inspectProvenanceId, setInspectProvenanceId] = useState<string | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch Providers on Mount
   useEffect(() => {
@@ -216,16 +222,94 @@ function CreateStudioContent() {
     setMood(m);
   };
 
+  const cleanupJobMonitoring = () => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupJobMonitoring();
+    };
+  }, []);
+
+  const handleJobCompleted = (payload: {
+    track_id: string;
+    audio_url: string;
+    second_audio_url?: string | null;
+    duration_seconds?: number;
+    waveform?: number[];
+  }) => {
+    cleanupJobMonitoring();
+    setIsGenerating(false);
+    setJobProgress(null);
+    setActiveJobId(null);
+    refreshUser();
+
+    if (payload.track_id && payload.audio_url) {
+      const trackA: TrackItem = {
+        id: payload.track_id,
+        title: `${genre} Opus ${musicalKey} (Take 1)`,
+        genre,
+        duration_seconds: payload.duration_seconds || duration,
+        audio_url: payload.audio_url,
+        waveform_data: payload.waveform,
+        bpm,
+        musical_key: musicalKey,
+        commercial_rights_status:
+          user?.role === "pro_producer" || user?.role === "studio"
+            ? "commercial_granted"
+            : "non_commercial_personal",
+      };
+      setVariantA(trackA);
+      playTrack(trackA);
+
+      if (payload.second_audio_url) {
+        const trackB: TrackItem = {
+          id: `${payload.track_id}-take2`,
+          title: `${genre} Opus ${musicalKey} (Take 2 - Alternate Harmonics)`,
+          genre,
+          duration_seconds: payload.duration_seconds || duration,
+          audio_url: payload.second_audio_url,
+          bpm,
+          musical_key: musicalKey,
+          commercial_rights_status:
+            user?.role === "pro_producer" || user?.role === "studio"
+              ? "commercial_granted"
+              : "non_commercial_personal",
+        };
+        setVariantB(trackB);
+      } else {
+        setVariantB(null);
+      }
+    }
+  };
+
+  const handleJobFailed = (jobId: string, errMessage: string) => {
+    cleanupJobMonitoring();
+    setIsGenerating(false);
+    setJobProgress(null);
+    setActiveJobId(null);
+    setLastFailedJobId(jobId);
+    setErrorMessage(errMessage || "Generation worker encountered an error.");
+    refreshUser();
+  };
+
   // Cancel Job Action
   const handleCancelJob = async () => {
     if (!activeJobId) return;
     try {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
+      cleanupJobMonitoring();
       await apiRequest(`/generation/${activeJobId}/cancel`, { method: "POST" });
       setIsGenerating(false);
       setJobProgress(null);
+      setActiveJobId(null);
       setErrorMessage("Generation task was cancelled. Reserved credits have been refunded.");
       refreshUser();
     } catch (err: any) {
@@ -257,87 +341,86 @@ function CreateStudioContent() {
     }
   };
 
-  // SSE Stream Listener
+  // Dual SSE Stream Listener & Polling Fallback
   const attachStream = (jobId: string) => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
+    cleanupJobMonitoring();
+
+    // 1. Setup Server-Sent Events (SSE) for zero-latency progress updates
+    try {
+      const eventSource = new EventSource(`/api/v1/jobs/${jobId}/stream`);
+      eventSourceRef.current = eventSource;
+
+      eventSource.addEventListener("progress", (evt) => {
+        try {
+          const payload = JSON.parse(evt.data);
+          setJobProgress({
+            phase: payload.phase ? payload.phase.replace(/_/g, " ") : "Processing",
+            progress: payload.progress_percentage || 25,
+            current_stage: payload.current_stage || "Synthesizing audio",
+          });
+        } catch {}
+      });
+
+      eventSource.addEventListener("complete", (evt) => {
+        try {
+          const payload = JSON.parse(evt.data);
+          handleJobCompleted(payload);
+        } catch {}
+      });
+
+      eventSource.addEventListener("error", () => {
+        // SSE disconnected or closed; smoothly transition to polling fallback without interrupting user
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+      });
+    } catch {
+      // EventSource not supported or failed to construct; polling fallback will handle status
     }
 
-    const eventSource = new EventSource(`/api/v1/jobs/${jobId}/stream`);
-    eventSourceRef.current = eventSource;
-
-    eventSource.addEventListener("progress", (evt) => {
+    // 2. Setup Active Polling Fallback (ensures completion even if SSE is interrupted or proxied)
+    pollIntervalRef.current = setInterval(async () => {
       try {
-        const payload = JSON.parse(evt.data);
-        setJobProgress({
-          phase: payload.phase ? payload.phase.replace(/_/g, " ") : "Processing",
-          progress: payload.progress_percentage || 25,
-          current_stage: payload.current_stage || "Synthesizing audio",
-        });
-      } catch {}
-    });
+        const statusData = await apiRequest<{
+          job_id: string;
+          status: string;
+          progress_percentage?: number;
+          track_id?: string;
+          audio_url?: string;
+          second_audio_url?: string;
+          duration_seconds?: number;
+          error_code?: string;
+          error_message?: string;
+        }>(`/generation/${jobId}/status`);
 
-    eventSource.addEventListener("complete", (evt) => {
-      try {
-        const payload = JSON.parse(evt.data);
-        eventSource.close();
-        setIsGenerating(false);
-        setJobProgress(null);
-        setActiveJobId(null);
-        refreshUser();
-
-        // Primary Variant A
-        const trackA: TrackItem = {
-          id: payload.track_id,
-          title: `${genre} Opus ${musicalKey} (Take 1)`,
-          genre,
-          duration_seconds: payload.duration_seconds || duration,
-          audio_url: payload.audio_url,
-          waveform_data: payload.waveform,
-          bpm,
-          musical_key: musicalKey,
-          commercial_rights_status:
-            user?.role === "pro_producer" || user?.role === "studio"
-              ? "commercial_granted"
-              : "non_commercial_personal",
-        };
-        setVariantA(trackA);
-        playTrack(trackA);
-
-        // Variant B if present
-        if (payload.second_audio_url) {
-          const trackB: TrackItem = {
-            id: `${payload.track_id}-take2`,
-            title: `${genre} Opus ${musicalKey} (Take 2 - Alternate Harmonics)`,
-            genre,
-            duration_seconds: payload.duration_seconds || duration,
-            audio_url: payload.second_audio_url,
-            bpm,
-            musical_key: musicalKey,
-            commercial_rights_status:
-              user?.role === "pro_producer" || user?.role === "studio"
-                ? "commercial_granted"
-                : "non_commercial_personal",
-          };
-          setVariantB(trackB);
-        } else {
-          setVariantB(null);
+        if (statusData.status === "completed" || statusData.status === "succeeded") {
+          handleJobCompleted({
+            track_id: statusData.track_id!,
+            audio_url: statusData.audio_url!,
+            second_audio_url: statusData.second_audio_url,
+            duration_seconds: statusData.duration_seconds,
+          });
+        } else if (statusData.status === "failed") {
+          handleJobFailed(jobId, statusData.error_message || "Generation worker encountered an error.");
+        } else if (statusData.status === "cancelled") {
+          cleanupJobMonitoring();
+          setIsGenerating(false);
+          setJobProgress(null);
+          setActiveJobId(null);
+          setErrorMessage("Generation task was cancelled.");
+          refreshUser();
+        } else if (statusData.progress_percentage) {
+          setJobProgress((prev) => ({
+            phase: statusData.status === "processing" ? "Synthesizing audio harmonics" : (prev?.phase || "In queue"),
+            progress: Math.max(prev?.progress || 10, statusData.progress_percentage || 20),
+            current_stage: prev?.current_stage || "Rendering soundscape",
+          }));
         }
-      } catch {}
-    });
-
-    eventSource.addEventListener("error", (evt: any) => {
-      eventSource.close();
-      setIsGenerating(false);
-      setJobProgress(null);
-      setLastFailedJobId(jobId);
-      try {
-        const errData = JSON.parse(evt.data || "{}");
-        setErrorMessage(errData.error_message || "Generation worker encountered an error.");
       } catch {
-        setErrorMessage("Connection to generation worker was interrupted.");
+        // Polling retry on next interval tick
       }
-    });
+    }, 2000);
   };
 
   // Submit Generation Request
@@ -346,6 +429,13 @@ function CreateStudioContent() {
     setErrorMessage(null);
     setVariantA(null);
     setVariantB(null);
+
+    // Authentication Guard
+    if (!user) {
+      setShowAuthModal(true);
+      setErrorMessage("Please sign in or create an account to generate AI music. New creator accounts receive 50 complimentary credits.");
+      return;
+    }
 
     // Client-side Capability Validation Checks
     if (activeProvider) {
@@ -849,6 +939,10 @@ function CreateStudioContent() {
                         <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono">
                           <CheckCircle2 className="w-3 h-3" /> Ready
                         </span>
+                      ) : p.status_label === "Worker Offline" || p.provider_type === "self_hosted" ? (
+                        <span className="flex items-center gap-1 text-[10px] text-amber-400 font-mono">
+                          <AlertCircle className="w-3 h-3" /> Worker Offline
+                        </span>
                       ) : (
                         <span className="flex items-center gap-1 text-[10px] text-amber-400 font-mono">
                           <AlertCircle className="w-3 h-3" /> Needs Key
@@ -861,7 +955,7 @@ function CreateStudioContent() {
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {p.supports_vocals ? (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">
-                          Vocals
+                          Vocals & Lyrics
                         </span>
                       ) : (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-studio-800 text-studio-500 font-mono">
@@ -1029,6 +1123,12 @@ function CreateStudioContent() {
           onClose={() => setInspectProvenanceId(null)}
         />
       )}
+
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        defaultMode="login"
+      />
     </div>
   );
 }

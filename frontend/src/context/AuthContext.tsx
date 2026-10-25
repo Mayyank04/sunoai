@@ -93,7 +93,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(savedToken);
       refreshUser().finally(() => setLoading(false));
     } else {
-      quickDemoLogin().finally(() => setLoading(false));
+      setUser(null);
+      setToken(null);
+      setLoading(false);
     }
   };
 

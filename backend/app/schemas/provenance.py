@@ -39,7 +39,7 @@ class VerifiedRightsProvenanceRecord(BaseModel):
     license_type: str
     license_version: str
     commercial_use_eligibility: str  # 'eligible', 'ineligible', 'restricted'
-    commercial_eligibility_reasons: List[str] = []
+    commercial_eligibility_reasons: Optional[List[str]] = Field(default_factory=list)
     user_supplied_assets: Optional[List[Dict[str, Any]]] = None
     source_asset_rights_declarations: Optional[Dict[str, Any]] = None
     prompt_reference: Optional[Dict[str, Any]] = None

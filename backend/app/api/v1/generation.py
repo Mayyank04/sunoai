@@ -36,6 +36,40 @@ async def list_generation_providers():
     """Lists available AI audio generation providers with their real-time configuration status."""
     return provider_registry.list_all()
 
+@router.get("/providers/{provider_id}/health")
+async def get_provider_health(provider_id: str):
+    """Returns dynamic runtime health and worker connectivity for a specific model provider."""
+    provider = provider_registry.get(provider_id)
+    if not provider:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown audio provider '{provider_id}'."
+        )
+    return await provider.check_health()
+
+@router.get("/providers/{provider_id}/ready")
+async def get_provider_readiness(provider_id: str):
+    """Returns readiness check for a specific model provider."""
+    provider = provider_registry.get(provider_id)
+    if not provider:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown audio provider '{provider_id}'."
+        )
+    return await provider.check_readiness()
+
+@router.get("/providers/{provider_id}/capabilities", response_model=ProviderCapabilities)
+async def get_provider_capabilities(provider_id: str):
+    """Returns declared capabilities and feature matrix for a specific model provider."""
+    provider = provider_registry.get(provider_id)
+    if not provider:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown audio provider '{provider_id}'."
+        )
+    return provider.get_capabilities()
+
+
 @router.post("/estimate", response_model=CostEstimate)
 async def estimate_generation_cost(
     req: GenerationEstimateRequest,
@@ -192,53 +226,61 @@ async def create_generation_job(
         )
 
     # 7. Atomic Transaction: Reserve Credits & Persist Job + Generation Records
-    current_user.credits_balance -= credits_required
     job_id = f"job_gen_{uuid.uuid4().hex[:12]}"
+    try:
+        current_user.credits_balance -= credits_required
 
-    ledger = CreditLedger(
-        user_id=current_user.id,
-        amount=-credits_required,
-        balance_after=current_user.credits_balance,
-        transaction_type="generation",
-        reference_id=job_id,
-        idempotency_key=idempotency_key,
-        notes=f"AI generation with {req.provider}:{req.model_name} (variants: {2 if effective_dual_variants else 1})"
-    )
-    db.add(ledger)
+        ledger = CreditLedger(
+            user_id=current_user.id,
+            amount=-credits_required,
+            balance_after=current_user.credits_balance,
+            transaction_type="generation",
+            status="reserved",
+            reference_id=job_id,
+            idempotency_key=idempotency_key,
+            notes=f"AI generation with {req.provider}:{req.model_name} (variants: {2 if effective_dual_variants else 1})"
+        )
+        db.add(ledger)
 
-    db_job = Job(
-        id=job_id,
-        user_id=current_user.id,
-        job_type="generation",
-        status="queued",
-        progress_percentage=0,
-        current_stage="Job queued for audio synthesis",
-        retry_count=0,
-        max_retries=3,
-        timeout_seconds=300,
-        idempotency_key=idempotency_key,
-        payload=gen_params.model_dump(),
-        started_at=None,
-        completed_at=None,
-    )
-    db.add(db_job)
+        db_job = Job(
+            id=job_id,
+            user_id=current_user.id,
+            job_type="generation",
+            status="queued",
+            progress_percentage=0,
+            current_stage="Job queued for audio synthesis",
+            retry_count=0,
+            max_retries=3,
+            timeout_seconds=300,
+            idempotency_key=idempotency_key,
+            payload=gen_params.model_dump(),
+            started_at=None,
+            completed_at=None,
+        )
+        db.add(db_job)
 
-    generation = Generation(
-        user_id=current_user.id,
-        job_id=job_id,
-        provider=req.provider,
-        model_name=req.model_name,
-        prompt=req.prompt,
-        negative_prompt=req.negative_prompt,
-        seed=seed,
-        temperature=req.temperature,
-        duration_requested=req.duration_seconds,
-        status="queued",
-        progress_percentage=0,
-        credits_deducted=credits_required
-    )
-    db.add(generation)
-    await db.commit()
+        generation = Generation(
+            user_id=current_user.id,
+            job_id=job_id,
+            provider=req.provider,
+            model_name=req.model_name,
+            prompt=req.prompt,
+            negative_prompt=req.negative_prompt,
+            seed=seed,
+            temperature=req.temperature,
+            duration_requested=req.duration_seconds,
+            status="queued",
+            progress_percentage=0,
+            credits_deducted=credits_required
+        )
+        db.add(generation)
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initialize generation transaction: {str(exc)}"
+        )
 
     # 8. Dispatch Background Audio Processing Pipeline
     asyncio.create_task(
@@ -282,9 +324,11 @@ async def get_generation_status(
 
     audio_url = None
     second_audio_url = None
+    duration_seconds = None
     if job and job.result:
         audio_url = job.result.get("audio_url")
         second_audio_url = job.result.get("second_audio_url")
+        duration_seconds = job.result.get("duration_seconds")
 
     # If completed and track_id is set, fetch track directly
     if not audio_url and gen.track_id:
@@ -292,6 +336,7 @@ async def get_generation_status(
         track = t_res.scalar_one_or_none()
         if track:
             audio_url = track.audio_url
+            duration_seconds = track.duration_seconds
             # Check for version 2
             v_res = await db.execute(select(SongVersion).where(SongVersion.track_id == track.id, SongVersion.version_number == 2))
             version2 = v_res.scalar_one_or_none()
@@ -305,6 +350,7 @@ async def get_generation_status(
         track_id=gen.track_id,
         audio_url=audio_url,
         second_audio_url=second_audio_url,
+        duration_seconds=duration_seconds,
         error_code=gen.error_code,
         error_message=gen.error_message,
     )

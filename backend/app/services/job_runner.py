@@ -224,6 +224,7 @@ class JobRunner:
                         track_id=track.id,
                         creator_id=user.id,
                         model_provider=provider.provider_id,
+                        model_version=params.model_name or "ace-step-1.5-base",
                         model_checkpoint_hash=None,
                         generation_seed=gen_result.seed_used,
                         input_prompt_hash=provenance_service.compute_prompt_hash(params.prompt),
@@ -231,9 +232,20 @@ class JobRunner:
                         c2pa_manifest=c2pa_doc,
                         license_type=lic_name,
                         commercial_eligibility=commercial_ok,
+                        commercial_use_eligibility="eligible" if commercial_ok else "restricted",
+                        commercial_eligibility_reasons=[],
                         disclaimer=discl,
+                        legal_disclaimer=discl,
                     )
                     session.add(prov)
+
+                    # Mark Credit Reservation as Consumed
+                    c_res = await session.execute(
+                        select(CreditLedger).where(CreditLedger.reference_id == job_id, CreditLedger.transaction_type == "generation")
+                    )
+                    orig_ledger = c_res.scalar_one_or_none()
+                    if orig_ledger:
+                        orig_ledger.status = "consumed"
 
                     # Update Generation record
                     g_res = await session.execute(select(Generation).where(Generation.job_id == job_id))
@@ -272,6 +284,14 @@ class JobRunner:
             # Failure handling & Credit auto-refund
             async with core_db.async_session_maker() as session:
                 async with session.begin():
+                    # Find original reservation
+                    c_res = await session.execute(
+                        select(CreditLedger).where(CreditLedger.reference_id == job_id, CreditLedger.transaction_type == "generation")
+                    )
+                    orig_ledger = c_res.scalar_one_or_none()
+                    if orig_ledger:
+                        orig_ledger.status = "refunded"
+
                     # Refund user credits
                     u_res = await session.execute(select(User).where(User.id == user_id))
                     user = u_res.scalar_one_or_none()
@@ -282,7 +302,9 @@ class JobRunner:
                             amount=credits_cost,
                             balance_after=user.credits_balance,
                             transaction_type="refund",
+                            status="refunded",
                             reference_id=job_id,
+                            parent_ledger_id=orig_ledger.id if orig_ledger else None,
                             notes=f"Auto-refund for failed generation: {str(e)}",
                         )
                         session.add(ledger)

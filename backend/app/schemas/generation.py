@@ -45,6 +45,8 @@ class GenerationStatusResponse(BaseModel):
     track_id: Optional[str] = None
     audio_url: Optional[str] = None
     second_audio_url: Optional[str] = None
+    duration_seconds: Optional[float] = None
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+
 
